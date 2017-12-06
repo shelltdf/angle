@@ -196,6 +196,17 @@ add_definitions(-DANGLE_ENABLE_HLSL)
 add_definitions(-DANGLE_ENABLE_ESSL)
 
 
+set(RENDER_LIBRARY d3d11 dxguid)
+IF( WIN32 AND NOT CYGWIN AND NOT MINGW )
+    set(RENDER_LIBRARY d3d11 dxguid)
+    if( CMAKE_SIZEOF_VOID_P EQUAL 8 )
+        link_directories("C:/Program Files (x86)/Windows Kits/8.1/Lib/winv6.3/um/x64")
+    ELSE(CMAKE_SIZEOF_VOID_P EQUAL 8 )
+        link_directories("C:/Program Files (x86)/Windows Kits/8.1/Lib/winv6.3/um/x86")
+    ENDIF(CMAKE_SIZEOF_VOID_P EQUAL 8 )
+ENDIF( WIN32 AND NOT CYGWIN AND NOT MINGW )
+
+
 
 ADD_SUBDIRECTORY(src)
 ADD_SUBDIRECTORY(util)
