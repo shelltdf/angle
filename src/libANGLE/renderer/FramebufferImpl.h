@@ -70,7 +70,7 @@ class FramebufferImpl : angle::NonCopyable
                                  const gl::Rectangle &area,
                                  GLenum format,
                                  GLenum type,
-                                 void *pixels) const = 0;
+                                 void *pixels) = 0;
 
     virtual gl::Error blit(const gl::Context *context,
                            const gl::Rectangle &sourceArea,
@@ -78,10 +78,10 @@ class FramebufferImpl : angle::NonCopyable
                            GLbitfield mask,
                            GLenum filter) = 0;
 
-    virtual bool checkStatus() const = 0;
+    virtual bool checkStatus(const gl::Context *context) const = 0;
 
-    virtual void syncState(const gl::Context *context,
-                           const gl::Framebuffer::DirtyBits &dirtyBits) = 0;
+    virtual gl::Error syncState(const gl::Context *context,
+                                const gl::Framebuffer::DirtyBits &dirtyBits) = 0;
 
     virtual gl::Error getSamplePosition(size_t index, GLfloat *xy) const = 0;
 

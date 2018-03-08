@@ -23,6 +23,8 @@ class VertexArrayGL : public VertexArrayImpl
     VertexArrayGL(const gl::VertexArrayState &data,
                   const FunctionsGL *functions,
                   StateManagerGL *stateManager);
+    ~VertexArrayGL() override;
+
     void destroy(const gl::Context *context) override;
 
     gl::Error syncDrawArraysState(const gl::Context *context,
@@ -38,7 +40,6 @@ class VertexArrayGL : public VertexArrayImpl
                                     GLsizei instanceCount,
                                     bool primitiveRestartEnabled,
                                     const void **outIndices) const;
-    gl::Error syncElementArrayState(const gl::Context *context) const;
 
     GLuint getVertexArrayID() const;
     GLuint getAppliedElementArrayBufferID() const;
@@ -91,6 +92,8 @@ class VertexArrayGL : public VertexArrayImpl
     void updateAttribBinding(size_t attribIndex);
     void updateBindingBuffer(const gl::Context *context, size_t bindingIndex);
     void updateBindingDivisor(size_t bindingIndex);
+
+    void updateElementArrayBufferBinding(const gl::Context *context) const;
 
     void callVertexAttribPointer(GLuint attribIndex,
                                  const gl::VertexAttribute &attrib,

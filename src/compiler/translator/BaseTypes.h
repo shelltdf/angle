@@ -10,8 +10,9 @@
 #include <algorithm>
 #include <array>
 
-#include "common/debug.h"
 #include "GLSLANG/ShaderLang.h"
+#include "common/debug.h"
+#include "compiler/translator/ImmutableString.h"
 
 namespace sh
 {
@@ -56,16 +57,8 @@ enum TBasicType
     EbtInt,
     EbtUInt,
     EbtBool,
-    EbtGVec4,              // non type: represents vec4, ivec4, and uvec4
-    EbtGenType,            // non type: represents float, vec2, vec3, and vec4
-    EbtGenIType,           // non type: represents int, ivec2, ivec3, and ivec4
-    EbtGenUType,           // non type: represents uint, uvec2, uvec3, and uvec4
-    EbtGenBType,           // non type: represents bool, bvec2, bvec3, and bvec4
-    EbtVec,                // non type: represents vec2, vec3, and vec4
-    EbtIVec,               // non type: represents ivec2, ivec3, and ivec4
-    EbtUVec,               // non type: represents uvec2, uvec3, and uvec4
-    EbtBVec,               // non type: represents bvec2, bvec3, and bvec4
     EbtYuvCscStandardEXT,  // Only valid if EXT_YUV_target exists.
+
     EbtGuardSamplerBegin,  // non type: see implementation of IsSampler()
     EbtSampler2D,
     EbtSampler3D,
@@ -89,12 +82,6 @@ enum TBasicType
     EbtSamplerCubeShadow,
     EbtSampler2DArrayShadow,
     EbtGuardSamplerEnd,  // non type: see implementation of IsSampler()
-    EbtGSampler2D,       // non type: represents sampler2D, isampler2D, and usampler2D
-    EbtGSampler3D,       // non type: represents sampler3D, isampler3D, and usampler3D
-    EbtGSamplerCube,     // non type: represents samplerCube, isamplerCube, and usamplerCube
-    EbtGSampler2DArray,  // non type: represents sampler2DArray, isampler2DArray, and
-                         // usampler2DArray
-    EbtGSampler2DMS,     // non type: represents sampler2DMS, isampler2DMS, and usampler2DMS
 
     // images
     EbtGuardImageBegin,
@@ -112,13 +99,6 @@ enum TBasicType
     EbtUImageCube,
     EbtGuardImageEnd,
 
-    EbtGuardGImageBegin,
-    EbtGImage2D,       // non type: represents image2D, uimage2D, iimage2D
-    EbtGImage3D,       // non type: represents image3D, uimage3D, iimage3D
-    EbtGImage2DArray,  // non type: represents image2DArray, uimage2DArray, iimage2DArray
-    EbtGImageCube,     // non type: represents imageCube, uimageCube, iimageCube
-    EbtGuardGImageEnd,
-
     EbtStruct,
     EbtInterfaceBlock,
     EbtAddress,  // should be deprecated??
@@ -129,58 +109,95 @@ enum TBasicType
     EbtLast
 };
 
-inline TBasicType convertGImageToFloatImage(TBasicType type)
+constexpr const char *GetBasicMangledName(TBasicType t)
 {
-    switch (type)
+    switch (t)
     {
-        case EbtGImage2D:
-            return EbtImage2D;
-        case EbtGImage3D:
-            return EbtImage3D;
-        case EbtGImage2DArray:
-            return EbtImage2DArray;
-        case EbtGImageCube:
-            return EbtImageCube;
+        case EbtFloat:
+            return "f";
+        case EbtInt:
+            return "i";
+        case EbtUInt:
+            return "u";
+        case EbtBool:
+            return "b";
+        case EbtYuvCscStandardEXT:
+            return "y";
+        case EbtSampler2D:
+            return "s2";
+        case EbtSampler3D:
+            return "s3";
+        case EbtSamplerCube:
+            return "sC";
+        case EbtSampler2DArray:
+            return "sA";
+        case EbtSamplerExternalOES:
+            return "sX";
+        case EbtSamplerExternal2DY2YEXT:
+            return "sY";
+        case EbtSampler2DRect:
+            return "sR";
+        case EbtSampler2DMS:
+            return "sM";
+        case EbtISampler2D:
+            return "is2";
+        case EbtISampler3D:
+            return "is3";
+        case EbtISamplerCube:
+            return "isC";
+        case EbtISampler2DArray:
+            return "isA";
+        case EbtISampler2DMS:
+            return "isM";
+        case EbtUSampler2D:
+            return "us2";
+        case EbtUSampler3D:
+            return "us3";
+        case EbtUSamplerCube:
+            return "usC";
+        case EbtUSampler2DArray:
+            return "usA";
+        case EbtUSampler2DMS:
+            return "usM";
+        case EbtSampler2DShadow:
+            return "s2s";
+        case EbtSamplerCubeShadow:
+            return "sCs";
+        case EbtSampler2DArrayShadow:
+            return "sAs";
+        case EbtImage2D:
+            return "I2";
+        case EbtIImage2D:
+            return "iI2";
+        case EbtUImage2D:
+            return "uI2";
+        case EbtImage3D:
+            return "I3";
+        case EbtIImage3D:
+            return "iI3";
+        case EbtUImage3D:
+            return "uI3";
+        case EbtImage2DArray:
+            return "IA";
+        case EbtIImage2DArray:
+            return "iIA";
+        case EbtUImage2DArray:
+            return "uIA";
+        case EbtImageCube:
+            return "Ic";
+        case EbtIImageCube:
+            return "iIc";
+        case EbtUImageCube:
+            return "uIc";
+        case EbtAtomicCounter:
+            return "a";
+        case EbtStruct:
+        case EbtInterfaceBlock:
+            return nullptr;
         default:
-            UNREACHABLE();
+            // EbtVoid, EbtAddress and non types
+            return "";
     }
-    return EbtLast;
-}
-
-inline TBasicType convertGImageToIntImage(TBasicType type)
-{
-    switch (type)
-    {
-        case EbtGImage2D:
-            return EbtIImage2D;
-        case EbtGImage3D:
-            return EbtIImage3D;
-        case EbtGImage2DArray:
-            return EbtIImage2DArray;
-        case EbtGImageCube:
-            return EbtIImageCube;
-        default:
-            UNREACHABLE();
-    }
-    return EbtLast;
-}
-
-inline TBasicType convertGImageToUnsignedImage(TBasicType type)
-{
-    switch (type)
-    {
-        case EbtGImage2D:
-            return EbtUImage2D;
-        case EbtGImage3D:
-            return EbtUImage3D;
-        case EbtGImage2DArray:
-            return EbtUImage2DArray;
-        case EbtGImageCube:
-            return EbtUImageCube;
-        default:
-            UNREACHABLE();
-    }
-    return EbtLast;
 }
 
 const char *getBasicString(TBasicType t);
@@ -193,11 +210,6 @@ inline bool IsSampler(TBasicType type)
 inline bool IsImage(TBasicType type)
 {
     return type > EbtGuardImageBegin && type < EbtGuardImageEnd;
-}
-
-inline bool IsGImage(TBasicType type)
-{
-    return type > EbtGuardGImageBegin && type < EbtGuardGImageEnd;
 }
 
 inline bool IsAtomicCounter(TBasicType type)
@@ -477,6 +489,106 @@ inline bool IsShadowSampler(TBasicType type)
     return false;
 }
 
+inline bool IsImage2D(TBasicType type)
+{
+    switch (type)
+    {
+        case EbtImage2D:
+        case EbtIImage2D:
+        case EbtUImage2D:
+            return true;
+        case EbtImage3D:
+        case EbtIImage3D:
+        case EbtUImage3D:
+        case EbtImage2DArray:
+        case EbtIImage2DArray:
+        case EbtUImage2DArray:
+        case EbtImageCube:
+        case EbtIImageCube:
+        case EbtUImageCube:
+            return false;
+        default:
+            assert(!IsImage(type));
+    }
+
+    return false;
+}
+
+inline bool IsImage3D(TBasicType type)
+{
+    switch (type)
+    {
+        case EbtImage3D:
+        case EbtIImage3D:
+        case EbtUImage3D:
+            return true;
+        case EbtImage2D:
+        case EbtIImage2D:
+        case EbtUImage2D:
+        case EbtImage2DArray:
+        case EbtIImage2DArray:
+        case EbtUImage2DArray:
+        case EbtImageCube:
+        case EbtIImageCube:
+        case EbtUImageCube:
+            return false;
+        default:
+            assert(!IsImage(type));
+    }
+
+    return false;
+}
+
+inline bool IsImage2DArray(TBasicType type)
+{
+    switch (type)
+    {
+        case EbtImage2DArray:
+        case EbtIImage2DArray:
+        case EbtUImage2DArray:
+            return true;
+        case EbtImage2D:
+        case EbtIImage2D:
+        case EbtUImage2D:
+        case EbtImage3D:
+        case EbtIImage3D:
+        case EbtUImage3D:
+        case EbtImageCube:
+        case EbtIImageCube:
+        case EbtUImageCube:
+            return false;
+        default:
+            assert(!IsImage(type));
+    }
+
+    return false;
+}
+
+inline bool IsImageCube(TBasicType type)
+{
+    switch (type)
+    {
+        case EbtImageCube:
+        case EbtIImageCube:
+        case EbtUImageCube:
+            return true;
+        case EbtImage2D:
+        case EbtIImage2D:
+        case EbtUImage2D:
+        case EbtImage3D:
+        case EbtIImage3D:
+        case EbtUImage3D:
+        case EbtImage2DArray:
+        case EbtIImage2DArray:
+        case EbtUImage2DArray:
+            return false;
+        default:
+            assert(!IsImage(type));
+    }
+
+    return false;
+}
+
 inline bool IsInteger(TBasicType type)
 {
     return type == EbtInt || type == EbtUInt;
@@ -573,9 +685,14 @@ enum TQualifier
     EvqRestrict,
     EvqVolatile,
 
-    // GLSL ES 3.1 extension OES_geometry_shader qualifiers
+    // GLSL ES 3.1 extension EXT_geometry_shader qualifiers
     EvqGeometryIn,
     EvqGeometryOut,
+    EvqPerVertexIn,    // gl_in
+    EvqPrimitiveIDIn,  // gl_PrimitiveIDIn
+    EvqInvocationID,   // gl_InvocationID
+    EvqPrimitiveID,    // gl_PrimitiveID
+    EvqLayer,          // gl_Layer
 
     // end of list
     EvqLast
@@ -616,7 +733,8 @@ enum TLayoutBlockStorage
     EbsUnspecified,
     EbsShared,
     EbsPacked,
-    EbsStd140
+    EbsStd140,
+    EbsStd430
 };
 
 enum TYuvCscStandardEXT
@@ -641,54 +759,10 @@ enum TLayoutPrimitiveType
 
 struct TLayoutQualifier
 {
-    int location;
-    unsigned int locationsSpecified;
-    TLayoutMatrixPacking matrixPacking;
-    TLayoutBlockStorage blockStorage;
+    // Must have a trivial default constructor since it is used in YYSTYPE.
+    TLayoutQualifier() = default;
 
-    // Compute shader layout qualifiers.
-    sh::WorkGroupSize localSize;
-
-    int binding;
-    int offset;
-
-    // Image format layout qualifier
-    TLayoutImageInternalFormat imageInternalFormat;
-
-    // OVR_multiview num_views.
-    int numViews;
-
-    // EXT_YUV_target yuv layout qualifier.
-    bool yuv;
-
-    // OES_geometry_shader layout qualifiers.
-    TLayoutPrimitiveType primitiveType;
-    int invocations;
-    int maxVertices;
-
-    static TLayoutQualifier create()
-    {
-        TLayoutQualifier layoutQualifier;
-
-        layoutQualifier.location           = -1;
-        layoutQualifier.locationsSpecified = 0;
-        layoutQualifier.matrixPacking      = EmpUnspecified;
-        layoutQualifier.blockStorage       = EbsUnspecified;
-
-        layoutQualifier.localSize.fill(-1);
-        layoutQualifier.binding  = -1;
-        layoutQualifier.offset   = -1;
-        layoutQualifier.numViews = -1;
-        layoutQualifier.yuv      = false;
-
-        layoutQualifier.imageInternalFormat = EiifUnspecified;
-
-        layoutQualifier.primitiveType = EptUndefined;
-        layoutQualifier.invocations   = 0;
-        layoutQualifier.maxVertices   = -1;
-
-        return layoutQualifier;
-    }
+    constexpr static TLayoutQualifier Create() { return TLayoutQualifier(0); }
 
     bool isEmpty() const
     {
@@ -715,14 +789,67 @@ struct TLayoutQualifier
                1;
     }
 
-    bool isLocalSizeEqual(const sh::WorkGroupSize &localSizeIn) const
+    bool isLocalSizeEqual(const WorkGroupSize &localSizeIn) const
     {
         return localSize.isWorkGroupSizeMatching(localSizeIn);
+    }
+
+    int location;
+    unsigned int locationsSpecified;
+    TLayoutMatrixPacking matrixPacking;
+    TLayoutBlockStorage blockStorage;
+
+    // Compute shader layout qualifiers.
+    WorkGroupSize localSize;
+
+    int binding;
+    int offset;
+
+    // Image format layout qualifier
+    TLayoutImageInternalFormat imageInternalFormat;
+
+    // OVR_multiview num_views.
+    int numViews;
+
+    // EXT_YUV_target yuv layout qualifier.
+    bool yuv;
+
+    // OES_geometry_shader layout qualifiers.
+    TLayoutPrimitiveType primitiveType;
+    int invocations;
+    int maxVertices;
+
+  private:
+    explicit constexpr TLayoutQualifier(int /*placeholder*/)
+        : location(-1),
+          locationsSpecified(0),
+          matrixPacking(EmpUnspecified),
+          blockStorage(EbsUnspecified),
+          localSize(-1),
+          binding(-1),
+          offset(-1),
+          imageInternalFormat(EiifUnspecified),
+          numViews(-1),
+          yuv(false),
+          primitiveType(EptUndefined),
+          invocations(0),
+          maxVertices(-1)
+    {
     }
 };
 
 struct TMemoryQualifier
 {
+    // Must have a trivial default constructor since it is used in YYSTYPE.
+    TMemoryQualifier() = default;
+
+    bool isEmpty() const
+    {
+        return !readonly && !writeonly && !coherent && !restrictQualifier && !volatileQualifier;
+    }
+
+    constexpr static TMemoryQualifier Create() { return TMemoryQualifier(0); }
+
     // GLSL ES 3.10 Revision 4, 4.9 Memory Access Qualifiers
     // An image can be qualified as both readonly and writeonly. It still can be can be used with
     // imageSize().
@@ -733,22 +860,15 @@ struct TMemoryQualifier
     // restrict and volatile are reserved keywords in C/C++
     bool restrictQualifier;
     bool volatileQualifier;
-    static TMemoryQualifier create()
+
+  private:
+    explicit constexpr TMemoryQualifier(int /*placeholder*/)
+        : readonly(false),
+          writeonly(false),
+          coherent(false),
+          restrictQualifier(false),
+          volatileQualifier(false)
     {
-        TMemoryQualifier memoryQualifier;
-
-        memoryQualifier.readonly          = false;
-        memoryQualifier.writeonly         = false;
-        memoryQualifier.coherent          = false;
-        memoryQualifier.restrictQualifier = false;
-        memoryQualifier.volatileQualifier = false;
-
-        return memoryQualifier;
-    }
-
-    bool isEmpty()
-    {
-        return !readonly && !writeonly && !coherent && !restrictQualifier && !volatileQualifier;
     }
 };
 
@@ -807,6 +927,7 @@ inline const char *getQualifierString(TQualifier q)
     case EvqSecondaryFragDataEXT:   return "SecondaryFragDataEXT";
     case EvqViewIDOVR:              return "ViewIDOVR";
     case EvqViewportIndex:          return "ViewportIndex";
+    case EvqLayer:                  return "Layer";
     case EvqLastFragColor:          return "LastFragColor";
     case EvqLastFragData:           return "LastFragData";
     case EvqSmoothOut:              return "smooth out";
@@ -830,6 +951,7 @@ inline const char *getQualifierString(TQualifier q)
     case EvqWriteOnly:              return "writeonly";
     case EvqGeometryIn:             return "in";
     case EvqGeometryOut:            return "out";
+    case EvqPerVertexIn:            return "gl_in";
     default: UNREACHABLE();         return "unknown qualifier";
     }
     // clang-format on
@@ -863,6 +985,8 @@ inline const char *getBlockStorageString(TLayoutBlockStorage bsq)
             return "packed";
         case EbsStd140:
             return "std140";
+        case EbsStd430:
+            return "std430";
         default:
             UNREACHABLE();
             return "unknown block storage";
@@ -905,7 +1029,7 @@ inline const char *getImageInternalFormatString(TLayoutImageInternalFormat iifq)
     }
 }
 
-inline TYuvCscStandardEXT getYuvCscStandardEXT(const std::string &str)
+inline TYuvCscStandardEXT getYuvCscStandardEXT(const ImmutableString &str)
 {
     if (str == "itu_601")
         return EycsItu601;

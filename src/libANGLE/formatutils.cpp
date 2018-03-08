@@ -301,6 +301,8 @@ InternalFormat::InternalFormat()
 {
 }
 
+InternalFormat::InternalFormat(const InternalFormat &other) = default;
+
 bool InternalFormat::isLUMA() const
 {
     return ((redBits + greenBits + blueBits + depthBits + stencilBits) == 0 &&
@@ -312,15 +314,24 @@ GLenum InternalFormat::getReadPixelsFormat() const
     return format;
 }
 
-GLenum InternalFormat::getReadPixelsType() const
+GLenum InternalFormat::getReadPixelsType(const Version &version) const
 {
     switch (type)
     {
         case GL_HALF_FLOAT:
-            // The internal format may have a type of GL_HALF_FLOAT but when exposing this type as
-            // the IMPLEMENTATION_READ_TYPE, only HALF_FLOAT_OES is allowed by
-            // OES_texture_half_float
-            return GL_HALF_FLOAT_OES;
+        case GL_HALF_FLOAT_OES:
+            if (version < Version(3, 0))
+            {
+                // The internal format may have a type of GL_HALF_FLOAT but when exposing this type
+                // as the IMPLEMENTATION_READ_TYPE, only HALF_FLOAT_OES is allowed by
+                // OES_texture_half_float.  HALF_FLOAT becomes core in ES3 and is acceptable to use
+                // as an IMPLEMENTATION_READ_TYPE.
+                return GL_HALF_FLOAT_OES;
+            }
+            else
+            {
+                return GL_HALF_FLOAT;
+            }
 
         default:
             return type;
@@ -427,7 +438,9 @@ bool InternalFormat::isRequiredRenderbufferFormat(const Version &version) const
             return true;
         default:
             UNREACHABLE();
+#if !UNREACHABLE_IS_NORETURN
             return false;
+#endif
     }
 }
 
@@ -661,9 +674,9 @@ static InternalFormatInfoMap BuildInternalFormatInfoMap()
     AddRGBAFormat(&map, GL_RG8_SNORM,        true,  8,  8,  0,  0, 0, GL_RG,           GL_BYTE,                         GL_SIGNED_NORMALIZED,   false, RequireES<3, 0>,                              NeverSupported,                               AlwaysSupported);
     AddRGBAFormat(&map, GL_RGB8,             true,  8,  8,  8,  0, 0, GL_RGB,          GL_UNSIGNED_BYTE,                GL_UNSIGNED_NORMALIZED, false, RequireESOrExt<3, 0, &Extensions::rgb8rgba8>, RequireESOrExt<3, 0, &Extensions::rgb8rgba8>, AlwaysSupported);
     AddRGBAFormat(&map, GL_RGB8_SNORM,       true,  8,  8,  8,  0, 0, GL_RGB,          GL_BYTE,                         GL_SIGNED_NORMALIZED,   false, RequireES<3, 0>,                              NeverSupported,                               AlwaysSupported);
-    AddRGBAFormat(&map, GL_RGB565,           true,  5,  6,  5,  0, 0, GL_RGB,          GL_UNSIGNED_SHORT_5_6_5,         GL_UNSIGNED_NORMALIZED, false, RequireES<2, 0>,                              RequireES<2, 0>,                              AlwaysSupported);
-    AddRGBAFormat(&map, GL_RGBA4,            true,  4,  4,  4,  4, 0, GL_RGBA,         GL_UNSIGNED_SHORT_4_4_4_4,       GL_UNSIGNED_NORMALIZED, false, RequireES<2, 0>,                              RequireES<2, 0>,                              AlwaysSupported);
-    AddRGBAFormat(&map, GL_RGB5_A1,          true,  5,  5,  5,  1, 0, GL_RGBA,         GL_UNSIGNED_SHORT_5_5_5_1,       GL_UNSIGNED_NORMALIZED, false, RequireES<2, 0>,                              RequireES<2, 0>,                              AlwaysSupported);
+    AddRGBAFormat(&map, GL_RGB565,           true,  5,  6,  5,  0, 0, GL_RGB,          GL_UNSIGNED_SHORT_5_6_5,         GL_UNSIGNED_NORMALIZED, false, RequireES<1, 0>,                              RequireES<1, 0>,                              AlwaysSupported);
+    AddRGBAFormat(&map, GL_RGBA4,            true,  4,  4,  4,  4, 0, GL_RGBA,         GL_UNSIGNED_SHORT_4_4_4_4,       GL_UNSIGNED_NORMALIZED, false, RequireES<1, 0>,                              RequireES<1, 0>,                              AlwaysSupported);
+    AddRGBAFormat(&map, GL_RGB5_A1,          true,  5,  5,  5,  1, 0, GL_RGBA,         GL_UNSIGNED_SHORT_5_5_5_1,       GL_UNSIGNED_NORMALIZED, false, RequireES<1, 0>,                              RequireES<1, 0>,                              AlwaysSupported);
     AddRGBAFormat(&map, GL_RGBA8,            true,  8,  8,  8,  8, 0, GL_RGBA,         GL_UNSIGNED_BYTE,                GL_UNSIGNED_NORMALIZED, false, RequireESOrExt<3, 0, &Extensions::rgb8rgba8>, RequireESOrExt<3, 0, &Extensions::rgb8rgba8>, AlwaysSupported);
     AddRGBAFormat(&map, GL_RGBA8_SNORM,      true,  8,  8,  8,  8, 0, GL_RGBA,         GL_BYTE,                         GL_SIGNED_NORMALIZED,   false, RequireES<3, 0>,                              NeverSupported,                               AlwaysSupported);
     AddRGBAFormat(&map, GL_RGB10_A2,         true, 10, 10, 10,  2, 0, GL_RGBA,         GL_UNSIGNED_INT_2_10_10_10_REV,  GL_UNSIGNED_NORMALIZED, false, RequireES<3, 0>,                              RequireES<3, 0>,                              AlwaysSupported);
@@ -701,6 +714,12 @@ static InternalFormatInfoMap BuildInternalFormatInfoMap()
     AddRGBAFormat(&map, GL_BGRA4_ANGLEX,     true,  4,  4,  4,  4, 0, GL_BGRA_EXT,     GL_UNSIGNED_SHORT_4_4_4_4_REV_EXT, GL_UNSIGNED_NORMALIZED, false, RequireExt<&Extensions::textureFormatBGRA8888>, RequireExt<&Extensions::textureFormatBGRA8888>, AlwaysSupported);
     AddRGBAFormat(&map, GL_BGR5_A1_ANGLEX,   true,  5,  5,  5,  1, 0, GL_BGRA_EXT,     GL_UNSIGNED_SHORT_1_5_5_5_REV_EXT, GL_UNSIGNED_NORMALIZED, false, RequireExt<&Extensions::textureFormatBGRA8888>, RequireExt<&Extensions::textureFormatBGRA8888>, AlwaysSupported);
 
+    // Special format that is used for D3D textures that are used within ANGLE via the
+    // EGL_ANGLE_d3d_texture_client_buffer extension. We don't allow uploading texture images with
+    // this format, but textures in this format can be created from D3D textures, and filtering them
+    // and rendering to them is allowed.
+    AddRGBAFormat(&map, GL_BGRA8_SRGB_ANGLEX, true, 8,  8,  8,  8, 0, GL_BGRA_EXT,     GL_UNSIGNED_BYTE,                  GL_UNSIGNED_NORMALIZED, true,  NeverSupported, AlwaysSupported, AlwaysSupported);
+
     // Special format which is not really supported, so always false for all supports.
     AddRGBAFormat(&map, GL_BGR565_ANGLEX,    true,  5,  6,  5,  1, 0, GL_BGRA_EXT,     GL_UNSIGNED_SHORT_5_6_5,           GL_UNSIGNED_NORMALIZED, false, NeverSupported, NeverSupported, NeverSupported);
 
@@ -718,7 +737,7 @@ static InternalFormatInfoMap BuildInternalFormatInfoMap()
 
     // Depth stencil formats
     //                         | Internal format         |sized| D |S | X | Format            | Type                             | Component type        | Supported                                       | Renderable                                                                            | Filterable                                  |
-    AddDepthStencilFormat(&map, GL_DEPTH_COMPONENT16,     true, 16, 0,  0, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT,                 GL_UNSIGNED_NORMALIZED, RequireES<2, 0>,                                  RequireES<2, 0>,                                                                        RequireESOrExt<3, 0, &Extensions::depthTextures>);
+    AddDepthStencilFormat(&map, GL_DEPTH_COMPONENT16,     true, 16, 0,  0, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT,                 GL_UNSIGNED_NORMALIZED, RequireES<1, 0>,                                  RequireES<1, 0>,                                                                        RequireESOrExt<3, 0, &Extensions::depthTextures>);
     AddDepthStencilFormat(&map, GL_DEPTH_COMPONENT24,     true, 24, 0,  0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT,                   GL_UNSIGNED_NORMALIZED, RequireES<3, 0>,                                  RequireES<3, 0>,                                                                        RequireESOrExt<3, 0, &Extensions::depthTextures>);
     AddDepthStencilFormat(&map, GL_DEPTH_COMPONENT32F,    true, 32, 0,  0, GL_DEPTH_COMPONENT, GL_FLOAT,                          GL_FLOAT,               RequireES<3, 0>,                                  RequireES<3, 0>,                                                                        RequireESOrExt<3, 0, &Extensions::depthTextures>);
     AddDepthStencilFormat(&map, GL_DEPTH_COMPONENT32_OES, true, 32, 0,  0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT,                   GL_UNSIGNED_NORMALIZED, RequireExtOrExt<&Extensions::depthTextures, &Extensions::depth32>, RequireExtOrExt<&Extensions::depthTextures, &Extensions::depth32>,     AlwaysSupported                                 );
@@ -757,7 +776,7 @@ static InternalFormatInfoMap BuildInternalFormatInfoMap()
     AddCompressedFormat(&map, GL_COMPRESSED_RGBA_S3TC_DXT1_EXT,   4, 4,  64, 4, GL_RGBA, GL_UNSIGNED_BYTE, false, RequireExt<&Extensions::textureCompressionDXT1>,    NeverSupported, AlwaysSupported);
 
     // From GL_ANGLE_texture_compression_dxt3
-    AddCompressedFormat(&map, GL_COMPRESSED_RGBA_S3TC_DXT3_ANGLE, 4, 4, 128, 4, GL_RGBA, GL_UNSIGNED_BYTE, false, RequireExt<&Extensions::textureCompressionDXT5>,    NeverSupported, AlwaysSupported);
+    AddCompressedFormat(&map, GL_COMPRESSED_RGBA_S3TC_DXT3_ANGLE, 4, 4, 128, 4, GL_RGBA, GL_UNSIGNED_BYTE, false, RequireExt<&Extensions::textureCompressionDXT3>,    NeverSupported, AlwaysSupported);
 
     // From GL_ANGLE_texture_compression_dxt5
     AddCompressedFormat(&map, GL_COMPRESSED_RGBA_S3TC_DXT5_ANGLE, 4, 4, 128, 4, GL_RGBA, GL_UNSIGNED_BYTE, false, RequireExt<&Extensions::textureCompressionDXT5>,    NeverSupported, AlwaysSupported);
@@ -809,7 +828,7 @@ static InternalFormatInfoMap BuildInternalFormatInfoMap()
     // - All other stencil formats (all depth-stencil) are either float or normalized
     // - It affects only validation of internalformat in RenderbufferStorageMultisample.
     //                         | Internal format  |sized|D |S |X | Format    | Type            | Component type        | Supported      | Renderable     | Filterable   |
-    AddDepthStencilFormat(&map, GL_STENCIL_INDEX8, true, 0, 8, 0, GL_STENCIL, GL_UNSIGNED_BYTE, GL_UNSIGNED_NORMALIZED, RequireES<2, 0>, RequireES<2, 0>, NeverSupported);
+    AddDepthStencilFormat(&map, GL_STENCIL_INDEX8, true, 0, 8, 0, GL_STENCIL, GL_UNSIGNED_BYTE, GL_UNSIGNED_NORMALIZED, RequireES<1, 0>, RequireES<1, 0>, NeverSupported);
 
     // From GL_ANGLE_lossy_etc_decode
     //                       | Internal format                                                |W |H |BS |CC| Format | Type            | SRGB | Supported                                                                                     | Renderable     | Filterable    |
@@ -836,13 +855,13 @@ static InternalFormatInfoMap BuildInternalFormatInfoMap()
     AddRGBAFormat(&map, GL_RED,              false,  8,  0,  0,  0, 0, GL_RED,          GL_BYTE,                         GL_SIGNED_NORMALIZED,   false, NeverSupported,                               NeverSupported,                               NeverSupported );
     AddRGBAFormat(&map, GL_RG,               false,  8,  8,  0,  0, 0, GL_RG,           GL_UNSIGNED_BYTE,                GL_UNSIGNED_NORMALIZED, false, RequireExt<&Extensions::textureRG>,           AlwaysSupported,                              AlwaysSupported);
     AddRGBAFormat(&map, GL_RG,               false,  8,  8,  0,  0, 0, GL_RG,           GL_BYTE,                         GL_SIGNED_NORMALIZED,   false, NeverSupported,                               NeverSupported,                               NeverSupported );
-    AddRGBAFormat(&map, GL_RGB,              false,  8,  8,  8,  0, 0, GL_RGB,          GL_UNSIGNED_BYTE,                GL_UNSIGNED_NORMALIZED, false, RequireESOrExt<3, 0, &Extensions::rgb8rgba8>, RequireESOrExt<3, 0, &Extensions::rgb8rgba8>, AlwaysSupported);
-    AddRGBAFormat(&map, GL_RGB,              false,  5,  6,  5,  0, 0, GL_RGB,          GL_UNSIGNED_SHORT_5_6_5,         GL_UNSIGNED_NORMALIZED, false, RequireES<2, 0>,                              RequireES<2, 0>,                              AlwaysSupported);
+    AddRGBAFormat(&map, GL_RGB,              false,  8,  8,  8,  0, 0, GL_RGB,          GL_UNSIGNED_BYTE,                GL_UNSIGNED_NORMALIZED, false, RequireES<1, 0>,                              AlwaysSupported,                              AlwaysSupported);
+    AddRGBAFormat(&map, GL_RGB,              false,  5,  6,  5,  0, 0, GL_RGB,          GL_UNSIGNED_SHORT_5_6_5,         GL_UNSIGNED_NORMALIZED, false, RequireES<1, 0>,                              RequireES<1, 0>,                              AlwaysSupported);
     AddRGBAFormat(&map, GL_RGB,              false,  8,  8,  8,  0, 0, GL_RGB,          GL_BYTE,                         GL_SIGNED_NORMALIZED,   false, NeverSupported,                               NeverSupported,                               NeverSupported );
-    AddRGBAFormat(&map, GL_RGBA,             false,  4,  4,  4,  4, 0, GL_RGBA,         GL_UNSIGNED_SHORT_4_4_4_4,       GL_UNSIGNED_NORMALIZED, false, RequireES<2, 0>,                              RequireES<2, 0>,                              AlwaysSupported);
-    AddRGBAFormat(&map, GL_RGBA,             false,  5,  5,  5,  1, 0, GL_RGBA,         GL_UNSIGNED_SHORT_5_5_5_1,       GL_UNSIGNED_NORMALIZED, false, RequireES<2, 0>,                              RequireES<2, 0>,                              AlwaysSupported);
-    AddRGBAFormat(&map, GL_RGBA,             false,  8,  8,  8,  8, 0, GL_RGBA,         GL_UNSIGNED_BYTE,                GL_UNSIGNED_NORMALIZED, false, RequireES<2, 0>,                              RequireES<2, 0>,                              AlwaysSupported);
-    AddRGBAFormat(&map, GL_RGBA,             false, 10, 10, 10,  2, 0, GL_RGBA,         GL_UNSIGNED_INT_2_10_10_10_REV,  GL_UNSIGNED_NORMALIZED, false, RequireES<2, 0>,                              RequireES<2, 0>,                              AlwaysSupported);
+    AddRGBAFormat(&map, GL_RGBA,             false,  4,  4,  4,  4, 0, GL_RGBA,         GL_UNSIGNED_SHORT_4_4_4_4,       GL_UNSIGNED_NORMALIZED, false, RequireES<1, 0>,                              RequireES<1, 0>,                              AlwaysSupported);
+    AddRGBAFormat(&map, GL_RGBA,             false,  5,  5,  5,  1, 0, GL_RGBA,         GL_UNSIGNED_SHORT_5_5_5_1,       GL_UNSIGNED_NORMALIZED, false, RequireES<1, 0>,                              RequireES<1, 0>,                              AlwaysSupported);
+    AddRGBAFormat(&map, GL_RGBA,             false,  8,  8,  8,  8, 0, GL_RGBA,         GL_UNSIGNED_BYTE,                GL_UNSIGNED_NORMALIZED, false, RequireES<1, 0>,                              RequireES<1, 0>,                              AlwaysSupported);
+    AddRGBAFormat(&map, GL_RGBA,             false, 10, 10, 10,  2, 0, GL_RGBA,         GL_UNSIGNED_INT_2_10_10_10_REV,  GL_UNSIGNED_NORMALIZED, false, RequireES<1, 0>,                              RequireES<1, 0>,                              AlwaysSupported);
     AddRGBAFormat(&map, GL_RGBA,             false,  8,  8,  8,  8, 0, GL_RGBA,         GL_BYTE,                         GL_SIGNED_NORMALIZED,   false, NeverSupported,                               NeverSupported,                               NeverSupported );
     AddRGBAFormat(&map, GL_SRGB,             false,  8,  8,  8,  0, 0, GL_RGB,          GL_UNSIGNED_BYTE,                GL_UNSIGNED_NORMALIZED, true,  RequireExt<&Extensions::sRGB>,                NeverSupported,                               AlwaysSupported);
     AddRGBAFormat(&map, GL_SRGB_ALPHA_EXT,   false,  8,  8,  8,  8, 0, GL_RGBA,         GL_UNSIGNED_BYTE,                GL_UNSIGNED_NORMALIZED, true,  RequireExt<&Extensions::sRGB>,                RequireExt<&Extensions::sRGB>,                AlwaysSupported);
@@ -896,9 +915,9 @@ static InternalFormatInfoMap BuildInternalFormatInfoMap()
 
     // Unsized luminance alpha formats
     //                | Internal format    |sized | L | A | Format            | Type             | Component type        | Supported                                | Renderable    | Filterable                                    |
-    AddLUMAFormat(&map, GL_ALPHA,           false,  0,  8, GL_ALPHA,           GL_UNSIGNED_BYTE,  GL_UNSIGNED_NORMALIZED, RequireES<2, 0>,                           NeverSupported, AlwaysSupported                                );
-    AddLUMAFormat(&map, GL_LUMINANCE,       false,  8,  0, GL_LUMINANCE,       GL_UNSIGNED_BYTE,  GL_UNSIGNED_NORMALIZED, RequireES<2, 0>,                           NeverSupported, AlwaysSupported                                );
-    AddLUMAFormat(&map, GL_LUMINANCE_ALPHA, false,  8,  8, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE,  GL_UNSIGNED_NORMALIZED, RequireES<2, 0>,                           NeverSupported, AlwaysSupported                                );
+    AddLUMAFormat(&map, GL_ALPHA,           false,  0,  8, GL_ALPHA,           GL_UNSIGNED_BYTE,  GL_UNSIGNED_NORMALIZED, RequireES<1, 0>,                           NeverSupported, AlwaysSupported                                );
+    AddLUMAFormat(&map, GL_LUMINANCE,       false,  8,  0, GL_LUMINANCE,       GL_UNSIGNED_BYTE,  GL_UNSIGNED_NORMALIZED, RequireES<1, 0>,                           NeverSupported, AlwaysSupported                                );
+    AddLUMAFormat(&map, GL_LUMINANCE_ALPHA, false,  8,  8, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE,  GL_UNSIGNED_NORMALIZED, RequireES<1, 0>,                           NeverSupported, AlwaysSupported                                );
     AddLUMAFormat(&map, GL_ALPHA,           false,  0, 16, GL_ALPHA,           GL_HALF_FLOAT_OES, GL_FLOAT,               RequireExt<&Extensions::textureHalfFloat>, NeverSupported, RequireExt<&Extensions::textureHalfFloatLinear>);
     AddLUMAFormat(&map, GL_LUMINANCE,       false, 16,  0, GL_LUMINANCE,       GL_HALF_FLOAT_OES, GL_FLOAT,               RequireExt<&Extensions::textureHalfFloat>, NeverSupported, RequireExt<&Extensions::textureHalfFloatLinear>);
     AddLUMAFormat(&map, GL_LUMINANCE_ALPHA ,false, 16, 16, GL_LUMINANCE_ALPHA, GL_HALF_FLOAT_OES, GL_FLOAT,               RequireExt<&Extensions::textureHalfFloat>, NeverSupported, RequireExt<&Extensions::textureHalfFloatLinear>);
@@ -908,12 +927,12 @@ static InternalFormatInfoMap BuildInternalFormatInfoMap()
 
     // Unsized depth stencil formats
     //                         | Internal format        |sized | D |S | X | Format            | Type                             | Component type        | Supported                                            | Renderable                                           | Filterable    |
-    AddDepthStencilFormat(&map, GL_DEPTH_COMPONENT,      false, 16, 0,  0, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT,                 GL_UNSIGNED_NORMALIZED, RequireES<2, 0>,                                       RequireES<2, 0>,                                       AlwaysSupported);
-    AddDepthStencilFormat(&map, GL_DEPTH_COMPONENT,      false, 24, 0,  0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT,                   GL_UNSIGNED_NORMALIZED, RequireES<2, 0>,                                       RequireES<2, 0>,                                       AlwaysSupported);
-    AddDepthStencilFormat(&map, GL_DEPTH_COMPONENT,      false, 32, 0,  0, GL_DEPTH_COMPONENT, GL_FLOAT,                          GL_FLOAT,               RequireES<2, 0>,                                       RequireES<2, 0>,                                       AlwaysSupported);
+    AddDepthStencilFormat(&map, GL_DEPTH_COMPONENT,      false, 16, 0,  0, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT,                 GL_UNSIGNED_NORMALIZED, RequireES<1, 0>,                                       RequireES<1, 0>,                                       AlwaysSupported);
+    AddDepthStencilFormat(&map, GL_DEPTH_COMPONENT,      false, 24, 0,  0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT,                   GL_UNSIGNED_NORMALIZED, RequireES<1, 0>,                                       RequireES<1, 0>,                                       AlwaysSupported);
+    AddDepthStencilFormat(&map, GL_DEPTH_COMPONENT,      false, 32, 0,  0, GL_DEPTH_COMPONENT, GL_FLOAT,                          GL_FLOAT,               RequireES<1, 0>,                                       RequireES<1, 0>,                                       AlwaysSupported);
     AddDepthStencilFormat(&map, GL_DEPTH_STENCIL,        false, 24, 8,  0, GL_DEPTH_STENCIL,   GL_UNSIGNED_INT_24_8,              GL_UNSIGNED_NORMALIZED, RequireESOrExt<3, 0, &Extensions::packedDepthStencil>, RequireESOrExt<3, 0, &Extensions::packedDepthStencil>, AlwaysSupported);
     AddDepthStencilFormat(&map, GL_DEPTH_STENCIL,        false, 32, 8, 24, GL_DEPTH_STENCIL,   GL_FLOAT_32_UNSIGNED_INT_24_8_REV, GL_FLOAT,               RequireESOrExt<3, 0, &Extensions::packedDepthStencil>, RequireESOrExt<3, 0, &Extensions::packedDepthStencil>, AlwaysSupported);
-    AddDepthStencilFormat(&map, GL_STENCIL,              false,  0, 8,  0, GL_STENCIL,         GL_UNSIGNED_BYTE,                  GL_UNSIGNED_NORMALIZED, RequireES<2, 0>,                                       RequireES<2, 0>,                                       NeverSupported);
+    AddDepthStencilFormat(&map, GL_STENCIL,              false,  0, 8,  0, GL_STENCIL,         GL_UNSIGNED_BYTE,                  GL_UNSIGNED_NORMALIZED, RequireES<1, 0>,                                       RequireES<1, 0>,                                       NeverSupported);
     // clang-format on
 
     return map;
@@ -1066,7 +1085,7 @@ ErrorOrResult<GLuint> InternalFormat::computeRowPitch(GLenum formatType,
     if (compressed)
     {
         ASSERT(rowLength == 0);
-        return computeCompressedImageSize(formatType, Extents(width, 1, 1));
+        return computeCompressedImageSize(Extents(width, 1, 1));
     }
 
     CheckedNumeric<GLuint> checkedWidth(rowLength > 0 ? rowLength : width);
@@ -1104,8 +1123,7 @@ ErrorOrResult<GLuint> InternalFormat::computeDepthPitch(GLenum formatType,
     return computeDepthPitch(height, imageHeight, rowPitch);
 }
 
-ErrorOrResult<GLuint> InternalFormat::computeCompressedImageSize(GLenum formatType,
-                                                                     const Extents &size) const
+ErrorOrResult<GLuint> InternalFormat::computeCompressedImageSize(const Extents &size) const
 {
     CheckedNumeric<GLuint> checkedWidth(size.width);
     CheckedNumeric<GLuint> checkedHeight(size.height);
@@ -1162,7 +1180,7 @@ ErrorOrResult<GLuint> InternalFormat::computePackUnpackEndByte(
     CheckedNumeric<GLuint> checkedCopyBytes = 0;
     if (compressed)
     {
-        ANGLE_TRY_RESULT(computeCompressedImageSize(formatType, size), checkedCopyBytes);
+        ANGLE_TRY_RESULT(computeCompressedImageSize(size), checkedCopyBytes);
     }
     else if (size.height != 0 && (!is3D || size.depth != 0))
     {
@@ -1253,7 +1271,9 @@ AttributeType GetAttributeType(GLenum enumValue)
             return ATTRIBUTE_MAT4x3;
         default:
             UNREACHABLE();
+#if !UNREACHABLE_IS_NORETURN
             return ATTRIBUTE_FLOAT;
+#endif
     }
 }
 
@@ -1290,7 +1310,9 @@ VertexFormatType GetVertexFormatType(GLenum type, GLboolean normalized, GLuint c
                     return VERTEX_FORMAT_SBYTE4;
                 default:
                     UNREACHABLE();
-                    break;
+#if !UNREACHABLE_IS_NORETURN
+                    return VERTEX_FORMAT_INVALID;
+#endif
             }
         case GL_UNSIGNED_BYTE:
             switch (components)
@@ -1321,7 +1343,9 @@ VertexFormatType GetVertexFormatType(GLenum type, GLboolean normalized, GLuint c
                     return VERTEX_FORMAT_UBYTE4;
                 default:
                     UNREACHABLE();
-                    break;
+#if !UNREACHABLE_IS_NORETURN
+                    return VERTEX_FORMAT_INVALID;
+#endif
             }
         case GL_SHORT:
             switch (components)
@@ -1352,7 +1376,9 @@ VertexFormatType GetVertexFormatType(GLenum type, GLboolean normalized, GLuint c
                     return VERTEX_FORMAT_SSHORT4;
                 default:
                     UNREACHABLE();
-                    break;
+#if !UNREACHABLE_IS_NORETURN
+                    return VERTEX_FORMAT_INVALID;
+#endif
             }
         case GL_UNSIGNED_SHORT:
             switch (components)
@@ -1383,7 +1409,9 @@ VertexFormatType GetVertexFormatType(GLenum type, GLboolean normalized, GLuint c
                     return VERTEX_FORMAT_USHORT4;
                 default:
                     UNREACHABLE();
-                    break;
+#if !UNREACHABLE_IS_NORETURN
+                    return VERTEX_FORMAT_INVALID;
+#endif
             }
         case GL_INT:
             switch (components)
@@ -1414,7 +1442,9 @@ VertexFormatType GetVertexFormatType(GLenum type, GLboolean normalized, GLuint c
                     return VERTEX_FORMAT_SINT4;
                 default:
                     UNREACHABLE();
-                    break;
+#if !UNREACHABLE_IS_NORETURN
+                    return VERTEX_FORMAT_INVALID;
+#endif
             }
         case GL_UNSIGNED_INT:
             switch (components)
@@ -1445,7 +1475,9 @@ VertexFormatType GetVertexFormatType(GLenum type, GLboolean normalized, GLuint c
                     return VERTEX_FORMAT_UINT4;
                 default:
                     UNREACHABLE();
-                    break;
+#if !UNREACHABLE_IS_NORETURN
+                    return VERTEX_FORMAT_INVALID;
+#endif
             }
         case GL_FLOAT:
             switch (components)
@@ -1460,7 +1492,9 @@ VertexFormatType GetVertexFormatType(GLenum type, GLboolean normalized, GLuint c
                     return VERTEX_FORMAT_FLOAT4;
                 default:
                     UNREACHABLE();
-                    break;
+#if !UNREACHABLE_IS_NORETURN
+                    return VERTEX_FORMAT_INVALID;
+#endif
             }
         case GL_HALF_FLOAT:
             switch (components)
@@ -1475,7 +1509,9 @@ VertexFormatType GetVertexFormatType(GLenum type, GLboolean normalized, GLuint c
                     return VERTEX_FORMAT_HALF4;
                 default:
                     UNREACHABLE();
-                    break;
+#if !UNREACHABLE_IS_NORETURN
+                    return VERTEX_FORMAT_INVALID;
+#endif
             }
         case GL_FIXED:
             switch (components)
@@ -1490,7 +1526,9 @@ VertexFormatType GetVertexFormatType(GLenum type, GLboolean normalized, GLuint c
                     return VERTEX_FORMAT_FIXED4;
                 default:
                     UNREACHABLE();
-                    break;
+#if !UNREACHABLE_IS_NORETURN
+                    return VERTEX_FORMAT_INVALID;
+#endif
             }
         case GL_INT_2_10_10_10_REV:
             if (pureInteger)
@@ -1506,9 +1544,10 @@ VertexFormatType GetVertexFormatType(GLenum type, GLboolean normalized, GLuint c
             return VERTEX_FORMAT_UINT210;
         default:
             UNREACHABLE();
-            break;
+#if !UNREACHABLE_IS_NORETURN
+            return VERTEX_FORMAT_INVALID;
+#endif
     }
-    return VERTEX_FORMAT_UBYTE1;
 }
 
 VertexFormatType GetVertexFormatType(const VertexAttribute &attrib)
@@ -2100,7 +2139,9 @@ size_t GetVertexFormatTypeSize(VertexFormatType vertexFormatType)
         case VERTEX_FORMAT_INVALID:
         default:
             UNREACHABLE();
+#if !UNREACHABLE_IS_NORETURN
             return 0;
+#endif
     }
 }
 

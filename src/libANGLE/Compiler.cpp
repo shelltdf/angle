@@ -36,6 +36,13 @@ ShShaderSpec SelectShaderSpec(GLint majorVersion, GLint minorVersion, bool isWeb
             return isWebGL ? SH_WEBGL2_SPEC : SH_GLES3_SPEC;
         }
     }
+
+    // GLES1 emulation: Use GLES3 shader spec.
+    if (!isWebGL && majorVersion == 1)
+    {
+        return SH_GLES3_SPEC;
+    }
+
     return isWebGL ? SH_WEBGL_SPEC : SH_GLES2_SPEC;
 }
 
@@ -50,7 +57,8 @@ Compiler::Compiler(rx::GLImplFactory *implFactory, const ContextState &state)
       mResources(),
       mFragmentCompiler(nullptr),
       mVertexCompiler(nullptr),
-      mComputeCompiler(nullptr)
+      mComputeCompiler(nullptr),
+      mGeometryCompiler(nullptr)
 {
     ASSERT(state.getClientMajorVersion() == 2 || state.getClientMajorVersion() == 3);
 
@@ -88,6 +96,8 @@ Compiler::Compiler(rx::GLImplFactory *implFactory, const ContextState &state)
     mResources.MaxProgramTexelOffset   = caps.maxProgramTexelOffset;
 
     // GLSL ES 3.1 constants
+    mResources.MaxProgramTextureGatherOffset    = caps.maxProgramTextureGatherOffset;
+    mResources.MinProgramTextureGatherOffset    = caps.minProgramTextureGatherOffset;
     mResources.MaxImageUnits                    = caps.maxImageUnits;
     mResources.MaxVertexImageUniforms           = caps.maxVertexImageUniforms;
     mResources.MaxFragmentImageUniforms         = caps.maxFragmentImageUniforms;
@@ -118,6 +128,7 @@ Compiler::Compiler(rx::GLImplFactory *implFactory, const ContextState &state)
     mResources.MaxAtomicCounterBufferSize      = caps.maxAtomicCounterBufferSize;
 
     mResources.MaxUniformBufferBindings = caps.maxUniformBufferBindings;
+    mResources.MaxShaderStorageBufferBindings = caps.maxShaderStorageBufferBindings;
 
     // Needed by point size clamping workaround
     mResources.MaxPointSize = caps.maxAliasedPointSize;
@@ -126,6 +137,21 @@ Compiler::Compiler(rx::GLImplFactory *implFactory, const ContextState &state)
     {
         mResources.MaxDrawBuffers = 1;
     }
+
+    // Geometry Shader constants
+    mResources.EXT_geometry_shader              = extensions.geometryShader;
+    mResources.MaxGeometryUniformComponents     = caps.maxGeometryUniformComponents;
+    mResources.MaxGeometryUniformBlocks         = caps.maxGeometryUniformBlocks;
+    mResources.MaxGeometryInputComponents       = caps.maxGeometryInputComponents;
+    mResources.MaxGeometryOutputComponents      = caps.maxGeometryOutputComponents;
+    mResources.MaxGeometryOutputVertices        = caps.maxGeometryOutputVertices;
+    mResources.MaxGeometryTotalOutputComponents = caps.maxGeometryTotalOutputComponents;
+    mResources.MaxGeometryTextureImageUnits     = caps.maxGeometryTextureImageUnits;
+    mResources.MaxGeometryAtomicCounterBuffers  = caps.maxGeometryAtomicCounterBuffers;
+    mResources.MaxGeometryAtomicCounters        = caps.maxGeometryAtomicCounters;
+    mResources.MaxGeometryShaderStorageBlocks   = caps.maxGeometryShaderStorageBlocks;
+    mResources.MaxGeometryShaderInvocations     = caps.maxGeometryShaderInvocations;
+    mResources.MaxGeometryImageUniforms         = caps.maxGeometryImageUniforms;
 }
 
 Compiler::~Compiler()
@@ -157,12 +183,21 @@ Compiler::~Compiler()
         activeCompilerHandles--;
     }
 
+    if (mGeometryCompiler)
+    {
+        sh::Destruct(mGeometryCompiler);
+        mGeometryCompiler = nullptr;
+
+        ASSERT(activeCompilerHandles > 0);
+        activeCompilerHandles--;
+    }
+
     if (activeCompilerHandles == 0)
     {
         sh::Finalize();
     }
 
-    mImplementation->release();
+    ANGLE_SWALLOW_ERR(mImplementation->release());
 }
 
 ShHandle Compiler::getCompilerHandle(GLenum type)
@@ -179,6 +214,9 @@ ShHandle Compiler::getCompilerHandle(GLenum type)
             break;
         case GL_COMPUTE_SHADER:
             compiler = &mComputeCompiler;
+            break;
+        case GL_GEOMETRY_SHADER_EXT:
+            compiler = &mGeometryCompiler;
             break;
         default:
             UNREACHABLE();

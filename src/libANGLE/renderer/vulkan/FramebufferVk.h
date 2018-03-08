@@ -11,10 +11,12 @@
 #define LIBANGLE_RENDERER_VULKAN_FRAMEBUFFERVK_H_
 
 #include "libANGLE/renderer/FramebufferImpl.h"
-#include "libANGLE/renderer/vulkan/renderervk_utils.h"
+#include "libANGLE/renderer/RenderTargetCache.h"
+#include "libANGLE/renderer/vulkan/vk_cache_utils.h"
 
 namespace rx
 {
+class RendererVk;
 class RenderTargetVk;
 class WindowSurfaceVk;
 
@@ -68,7 +70,7 @@ class FramebufferVk : public FramebufferImpl, public ResourceVk
                          const gl::Rectangle &area,
                          GLenum format,
                          GLenum type,
-                         void *pixels) const override;
+                         void *pixels) override;
 
     gl::Error blit(const gl::Context *context,
                    const gl::Rectangle &sourceArea,
@@ -76,32 +78,32 @@ class FramebufferVk : public FramebufferImpl, public ResourceVk
                    GLbitfield mask,
                    GLenum filter) override;
 
-    bool checkStatus() const override;
+    bool checkStatus(const gl::Context *context) const override;
 
-    void syncState(const gl::Context *context,
-                   const gl::Framebuffer::DirtyBits &dirtyBits) override;
+    gl::Error syncState(const gl::Context *context,
+                        const gl::Framebuffer::DirtyBits &dirtyBits) override;
 
     gl::Error getSamplePosition(size_t index, GLfloat *xy) const override;
 
-    gl::Error beginRenderPass(const gl::Context *context,
-                              VkDevice device,
-                              vk::CommandBuffer *commandBuffer,
-                              Serial queueSerial,
-                              const gl::State &glState);
-
-    gl::ErrorOrResult<vk::RenderPass *> getRenderPass(const gl::Context *context, VkDevice device);
+    const vk::RenderPassDesc &getRenderPassDesc(const gl::Context *context);
+    gl::Error getCommandGraphNodeForDraw(const gl::Context *context,
+                                         vk::CommandGraphNode **nodeOut);
 
   private:
     FramebufferVk(const gl::FramebufferState &state);
     FramebufferVk(const gl::FramebufferState &state, WindowSurfaceVk *backbuffer);
 
     gl::ErrorOrResult<vk::Framebuffer *> getFramebuffer(const gl::Context *context,
-                                                        VkDevice device);
+                                                        RendererVk *rendererVk);
+
+    gl::Error clearColorAttachmentsWithScissorRegion(const gl::Context *context);
 
     WindowSurfaceVk *mBackbuffer;
 
-    vk::RenderPass mRenderPass;
+    Optional<vk::RenderPassDesc> mRenderPassDesc;
     vk::Framebuffer mFramebuffer;
+    Serial mLastRenderNodeSerial;
+    RenderTargetCache<RenderTargetVk> mRenderTargetCache;
 };
 
 }  // namespace rx

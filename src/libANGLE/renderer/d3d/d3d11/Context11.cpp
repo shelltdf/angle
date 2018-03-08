@@ -21,6 +21,7 @@
 #include "libANGLE/renderer/d3d/d3d11/Buffer11.h"
 #include "libANGLE/renderer/d3d/d3d11/Fence11.h"
 #include "libANGLE/renderer/d3d/d3d11/Framebuffer11.h"
+#include "libANGLE/renderer/d3d/d3d11/ProgramPipeline11.h"
 #include "libANGLE/renderer/d3d/d3d11/Renderer11.h"
 #include "libANGLE/renderer/d3d/d3d11/StateManager11.h"
 #include "libANGLE/renderer/d3d/d3d11/TransformFeedback11.h"
@@ -72,21 +73,20 @@ FramebufferImpl *Context11::createFramebuffer(const gl::FramebufferState &data)
 
 TextureImpl *Context11::createTexture(const gl::TextureState &state)
 {
-    switch (state.getTarget())
+    switch (state.getType())
     {
-        case GL_TEXTURE_2D:
+        case gl::TextureType::_2D:
             return new TextureD3D_2D(state, mRenderer);
-        case GL_TEXTURE_CUBE_MAP:
+        case gl::TextureType::CubeMap:
             return new TextureD3D_Cube(state, mRenderer);
-        case GL_TEXTURE_3D:
+        case gl::TextureType::_3D:
             return new TextureD3D_3D(state, mRenderer);
-        case GL_TEXTURE_2D_ARRAY:
+        case gl::TextureType::_2DArray:
             return new TextureD3D_2DArray(state, mRenderer);
-        case GL_TEXTURE_EXTERNAL_OES:
+        case gl::TextureType::External:
             return new TextureD3D_External(state, mRenderer);
-        case GL_TEXTURE_2D_MULTISAMPLE:
+        case gl::TextureType::_2DMultisample:
             return new TextureD3D_2DMultisample(state, mRenderer);
-            break;
         default:
             UNREACHABLE();
     }
@@ -94,9 +94,9 @@ TextureImpl *Context11::createTexture(const gl::TextureState &state)
     return nullptr;
 }
 
-RenderbufferImpl *Context11::createRenderbuffer()
+RenderbufferImpl *Context11::createRenderbuffer(const gl::RenderbufferState &state)
 {
-    return new RenderbufferD3D(mRenderer);
+    return new RenderbufferD3D(state, mRenderer);
 }
 
 BufferImpl *Context11::createBuffer(const gl::BufferState &state)
@@ -121,9 +121,9 @@ FenceNVImpl *Context11::createFenceNV()
     return new FenceNV11(mRenderer);
 }
 
-FenceSyncImpl *Context11::createFenceSync()
+SyncImpl *Context11::createSync()
 {
-    return new FenceSync11(mRenderer);
+    return new Sync11(mRenderer);
 }
 
 TransformFeedbackImpl *Context11::createTransformFeedback(const gl::TransformFeedbackState &state)
@@ -131,9 +131,14 @@ TransformFeedbackImpl *Context11::createTransformFeedback(const gl::TransformFee
     return new TransformFeedback11(state, mRenderer);
 }
 
-SamplerImpl *Context11::createSampler()
+SamplerImpl *Context11::createSampler(const gl::SamplerState &state)
 {
-    return new SamplerD3D();
+    return new SamplerD3D(state);
+}
+
+ProgramPipelineImpl *Context11::createProgramPipeline(const gl::ProgramPipelineState &data)
+{
+    return new ProgramPipeline11(data);
 }
 
 std::vector<PathImpl *> Context11::createPaths(GLsizei)
@@ -141,19 +146,20 @@ std::vector<PathImpl *> Context11::createPaths(GLsizei)
     return std::vector<PathImpl *>();
 }
 
-gl::Error Context11::flush()
+gl::Error Context11::flush(const gl::Context *context)
 {
     return mRenderer->flush();
 }
 
-gl::Error Context11::finish()
+gl::Error Context11::finish(const gl::Context *context)
 {
     return mRenderer->finish();
 }
 
 gl::Error Context11::drawArrays(const gl::Context *context, GLenum mode, GLint first, GLsizei count)
 {
-    return mRenderer->genericDrawArrays(context, mode, first, count, 0);
+    ANGLE_TRY(prepareForDrawCall(context, mode));
+    return mRenderer->drawArrays(context, mode, first, count, 0);
 }
 
 gl::Error Context11::drawArraysInstanced(const gl::Context *context,
@@ -162,7 +168,8 @@ gl::Error Context11::drawArraysInstanced(const gl::Context *context,
                                          GLsizei count,
                                          GLsizei instanceCount)
 {
-    return mRenderer->genericDrawArrays(context, mode, first, count, instanceCount);
+    ANGLE_TRY(prepareForDrawCall(context, mode));
+    return mRenderer->drawArrays(context, mode, first, count, instanceCount);
 }
 
 gl::Error Context11::drawElements(const gl::Context *context,
@@ -171,7 +178,8 @@ gl::Error Context11::drawElements(const gl::Context *context,
                                   GLenum type,
                                   const void *indices)
 {
-    return mRenderer->genericDrawElements(context, mode, count, type, indices, 0);
+    ANGLE_TRY(prepareForDrawCall(context, mode));
+    return mRenderer->drawElements(context, mode, count, type, indices, 0);
 }
 
 gl::Error Context11::drawElementsInstanced(const gl::Context *context,
@@ -181,7 +189,8 @@ gl::Error Context11::drawElementsInstanced(const gl::Context *context,
                                            const void *indices,
                                            GLsizei instances)
 {
-    return mRenderer->genericDrawElements(context, mode, count, type, indices, instances);
+    ANGLE_TRY(prepareForDrawCall(context, mode));
+    return mRenderer->drawElements(context, mode, count, type, indices, instances);
 }
 
 gl::Error Context11::drawRangeElements(const gl::Context *context,
@@ -192,14 +201,16 @@ gl::Error Context11::drawRangeElements(const gl::Context *context,
                                        GLenum type,
                                        const void *indices)
 {
-    return mRenderer->genericDrawElements(context, mode, count, type, indices, 0);
+    ANGLE_TRY(prepareForDrawCall(context, mode));
+    return mRenderer->drawElements(context, mode, count, type, indices, 0);
 }
 
 gl::Error Context11::drawArraysIndirect(const gl::Context *context,
                                         GLenum mode,
                                         const void *indirect)
 {
-    return mRenderer->genericDrawIndirect(context, mode, GL_NONE, indirect);
+    ANGLE_TRY(prepareForDrawCall(context, mode));
+    return mRenderer->drawArraysIndirect(context, mode, indirect);
 }
 
 gl::Error Context11::drawElementsIndirect(const gl::Context *context,
@@ -207,7 +218,8 @@ gl::Error Context11::drawElementsIndirect(const gl::Context *context,
                                           GLenum type,
                                           const void *indirect)
 {
-    return mRenderer->genericDrawIndirect(context, mode, type, indirect);
+    ANGLE_TRY(prepareForDrawCall(context, mode));
+    return mRenderer->drawElementsIndirect(context, mode, type, indirect);
 }
 
 GLenum Context11::getResetStatus()
@@ -248,6 +260,18 @@ void Context11::popGroupMarker()
     mRenderer->getAnnotator()->endEvent();
 }
 
+void Context11::pushDebugGroup(GLenum source, GLuint id, GLsizei length, const char *message)
+{
+    // Fall through to the EXT_debug_marker functions
+    pushGroupMarker(length, message);
+}
+
+void Context11::popDebugGroup()
+{
+    // Fall through to the EXT_debug_marker functions
+    popGroupMarker();
+}
+
 void Context11::syncState(const gl::Context *context, const gl::State::DirtyBits &dirtyBits)
 {
     mRenderer->getStateManager()->syncState(context, dirtyBits);
@@ -265,7 +289,7 @@ GLint64 Context11::getTimestamp()
 
 void Context11::onMakeCurrent(const gl::Context *context)
 {
-    mRenderer->getStateManager()->onMakeCurrent(context);
+    ANGLE_SWALLOW_ERR(mRenderer->getStateManager()->onMakeCurrent(context));
 }
 
 const gl::Caps &Context11::getNativeCaps() const
@@ -296,9 +320,13 @@ gl::Error Context11::dispatchCompute(const gl::Context *context,
     return mRenderer->dispatchCompute(context, numGroupsX, numGroupsY, numGroupsZ);
 }
 
+gl::Error Context11::dispatchComputeIndirect(const gl::Context *context, GLintptr indirect)
+{
+    UNIMPLEMENTED();
+    return gl::InternalError();
+}
+
 gl::Error Context11::triggerDrawCallProgramRecompilation(const gl::Context *context,
-                                                         gl::InfoLog *infoLog,
-                                                         gl::MemoryProgramCache *memoryCache,
                                                          GLenum drawMode)
 {
     const auto &glState    = context->getGLState();
@@ -322,43 +350,70 @@ gl::Error Context11::triggerDrawCallProgramRecompilation(const gl::Context *cont
     // Load the compiler if necessary and recompile the programs.
     ANGLE_TRY(mRenderer->ensureHLSLCompilerInitialized());
 
+    gl::InfoLog infoLog;
+
     if (recompileVS)
     {
         ShaderExecutableD3D *vertexExe = nullptr;
-        ANGLE_TRY(programD3D->getVertexExecutableForCachedInputLayout(&vertexExe, infoLog));
+        ANGLE_TRY(programD3D->getVertexExecutableForCachedInputLayout(&vertexExe, &infoLog));
         if (!programD3D->hasVertexExecutableForCachedInputLayout())
         {
-            return gl::InternalError() << "Error compiling dynamic vertex executable.";
+            ASSERT(infoLog.getLength() > 0);
+            ERR() << "Dynamic recompilation error log: " << infoLog.str();
+            return gl::InternalError()
+                   << "Error compiling dynamic vertex executable:" << infoLog.str();
         }
     }
 
     if (recompileGS)
     {
         ShaderExecutableD3D *geometryExe = nullptr;
-        ANGLE_TRY(programD3D->getGeometryExecutableForPrimitiveType(
-            context->getContextState(), drawMode, &geometryExe, infoLog));
+        ANGLE_TRY(programD3D->getGeometryExecutableForPrimitiveType(context, drawMode, &geometryExe,
+                                                                    &infoLog));
         if (!programD3D->hasGeometryExecutableForPrimitiveType(drawMode))
         {
-            return gl::InternalError() << "Error compiling dynamic geometry executable.";
+            ASSERT(infoLog.getLength() > 0);
+            ERR() << "Dynamic recompilation error log: " << infoLog.str();
+            return gl::InternalError()
+                   << "Error compiling dynamic geometry executable:" << infoLog.str();
         }
     }
 
     if (recompilePS)
     {
         ShaderExecutableD3D *pixelExe = nullptr;
-        ANGLE_TRY(programD3D->getPixelExecutableForCachedOutputLayout(&pixelExe, infoLog));
+        ANGLE_TRY(programD3D->getPixelExecutableForCachedOutputLayout(&pixelExe, &infoLog));
         if (!programD3D->hasPixelExecutableForCachedOutputLayout())
         {
-            return gl::InternalError() << "Error compiling dynamic pixel executable.";
+            ASSERT(infoLog.getLength() > 0);
+            ERR() << "Dynamic recompilation error log: " << infoLog.str();
+            return gl::InternalError()
+                   << "Error compiling dynamic pixel executable:" << infoLog.str();
         }
     }
 
     // Refresh the program cache entry.
-    if (memoryCache)
+    if (mMemoryProgramCache)
     {
-        memoryCache->updateProgram(context, program);
+        mMemoryProgramCache->updateProgram(context, program);
     }
 
+    return gl::NoError();
+}
+
+gl::Error Context11::prepareForDrawCall(const gl::Context *context, GLenum drawMode)
+{
+    ANGLE_TRY(mRenderer->getStateManager()->updateState(context, drawMode));
+    return gl::NoError();
+}
+
+gl::Error Context11::memoryBarrier(const gl::Context *context, GLbitfield barriers)
+{
+    return gl::NoError();
+}
+
+gl::Error Context11::memoryBarrierByRegion(const gl::Context *context, GLbitfield barriers)
+{
     return gl::NoError();
 }
 

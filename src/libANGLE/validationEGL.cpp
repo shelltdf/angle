@@ -25,28 +25,28 @@ namespace egl
 {
 namespace
 {
-size_t GetMaximumMipLevel(const gl::Context *context, GLenum target)
+size_t GetMaximumMipLevel(const gl::Context *context, gl::TextureType type)
 {
     const gl::Caps &caps = context->getCaps();
 
     size_t maxDimension = 0;
-    switch (target)
+    switch (type)
     {
-        case GL_TEXTURE_2D:
+        case gl::TextureType::_2D:
+        case gl::TextureType::_2DArray:
+        case gl::TextureType::_2DMultisample:
             maxDimension = caps.max2DTextureSize;
             break;
-        case GL_TEXTURE_RECTANGLE_ANGLE:
+        case gl::TextureType::Rectangle:
             maxDimension = caps.maxRectangleTextureSize;
             break;
-        case GL_TEXTURE_CUBE_MAP:
+        case gl::TextureType::CubeMap:
             maxDimension = caps.maxCubeMapTextureSize;
             break;
-        case GL_TEXTURE_3D:
+        case gl::TextureType::_3D:
             maxDimension = caps.max3DTextureSize;
             break;
-        case GL_TEXTURE_2D_ARRAY:
-            maxDimension = caps.max2DTextureSize;
-            break;
+
         default:
             UNREACHABLE();
     }
@@ -56,13 +56,12 @@ size_t GetMaximumMipLevel(const gl::Context *context, GLenum target)
 
 bool TextureHasNonZeroMipLevelsSpecified(const gl::Context *context, const gl::Texture *texture)
 {
-    size_t maxMip = GetMaximumMipLevel(context, texture->getTarget());
+    size_t maxMip = GetMaximumMipLevel(context, texture->getType());
     for (size_t level = 1; level < maxMip; level++)
     {
-        if (texture->getTarget() == GL_TEXTURE_CUBE_MAP)
+        if (texture->getType() == gl::TextureType::CubeMap)
         {
-            for (GLenum face = gl::FirstCubeMapTextureTarget; face <= gl::LastCubeMapTextureTarget;
-                 face++)
+            for (gl::TextureTarget face : gl::AllCubeFaceTextureTargets())
             {
                 if (texture->getFormat(face, level).valid())
                 {
@@ -72,7 +71,8 @@ bool TextureHasNonZeroMipLevelsSpecified(const gl::Context *context, const gl::T
         }
         else
         {
-            if (texture->getFormat(texture->getTarget(), level).valid())
+            if (texture->getFormat(gl::NonCubeTextureTypeToTarget(texture->getType()), level)
+                    .valid())
             {
                 return true;
             }
@@ -84,8 +84,8 @@ bool TextureHasNonZeroMipLevelsSpecified(const gl::Context *context, const gl::T
 
 bool CubeTextureHasUnspecifiedLevel0Face(const gl::Texture *texture)
 {
-    ASSERT(texture->getTarget() == GL_TEXTURE_CUBE_MAP);
-    for (GLenum face = gl::FirstCubeMapTextureTarget; face <= gl::LastCubeMapTextureTarget; face++)
+    ASSERT(texture->getType() == gl::TextureType::CubeMap);
+    for (gl::TextureTarget face : gl::AllCubeFaceTextureTargets())
     {
         if (!texture->getFormat(face, 0).valid())
         {
@@ -298,13 +298,12 @@ Error ValidateGetPlatformDisplayCommon(EGLenum platform,
     if (platform == EGL_PLATFORM_ANGLE_ANGLE)
     {
         EGLAttrib platformType       = EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE;
-        EGLAttrib deviceType         = EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE;
         bool enableAutoTrimSpecified = false;
-        bool deviceTypeSpecified     = false;
         bool presentPathSpecified    = false;
 
         Optional<EGLAttrib> majorVersion;
         Optional<EGLAttrib> minorVersion;
+        Optional<EGLAttrib> deviceType;
 
         for (const auto &curAttrib : attribMap)
         {
@@ -368,13 +367,16 @@ Error ValidateGetPlatformDisplayCommon(EGLenum platform,
                     switch (value)
                     {
                         case EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE:
-                        case EGL_PLATFORM_ANGLE_DEVICE_TYPE_WARP_ANGLE:
-                        case EGL_PLATFORM_ANGLE_DEVICE_TYPE_REFERENCE_ANGLE:
-                            deviceTypeSpecified = true;
+                        case EGL_PLATFORM_ANGLE_DEVICE_TYPE_NULL_ANGLE:
                             break;
 
-                        case EGL_PLATFORM_ANGLE_DEVICE_TYPE_NULL_ANGLE:
-                            // This is a hidden option, accepted by the OpenGL back-end.
+                        case EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE:
+                        case EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_REFERENCE_ANGLE:
+                            if (!clientExtensions.platformANGLED3D)
+                            {
+                                return EglBadAttribute()
+                                       << "EGL_ANGLE_platform_angle_d3d is not supported";
+                            }
                             break;
 
                         default:
@@ -398,21 +400,6 @@ Error ValidateGetPlatformDisplayCommon(EGLenum platform,
                     }
                     break;
 
-                case EGL_DISPLAY_ROBUST_RESOURCE_INITIALIZATION_ANGLE:
-                    if (!clientExtensions.displayRobustResourceInitialization)
-                    {
-                        return EglBadAttribute()
-                               << "Attribute EGL_DISPLAY_ROBUST_RESOURCE_INITIALIZATION_ANGLE "
-                                  "requires EGL_ANGLE_display_robust_resource_initialization.";
-                    }
-                    if (value != EGL_TRUE && value != EGL_FALSE)
-                    {
-                        return EglBadAttribute() << "EGL_DISPLAY_ROBUST_RESOURCE_"
-                                                    "INITIALIZATION_ANGLE must be either "
-                                                    "EGL_TRUE or EGL_FALSE.";
-                    }
-                    break;
-
                 default:
                     break;
             }
@@ -424,7 +411,7 @@ Error ValidateGetPlatformDisplayCommon(EGLenum platform,
                    << "Must specify major version if you specify a minor version.";
         }
 
-        if (deviceType == EGL_PLATFORM_ANGLE_DEVICE_TYPE_WARP_ANGLE &&
+        if (deviceType == EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE &&
             platformType != EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE)
         {
             return EglBadAttribute() << "EGL_PLATFORM_ANGLE_DEVICE_TYPE_WARP_ANGLE requires a "
@@ -444,12 +431,24 @@ Error ValidateGetPlatformDisplayCommon(EGLenum platform,
                                         "device type of EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE.";
         }
 
-        if (deviceTypeSpecified && platformType != EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE &&
-            platformType != EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE)
+        if (deviceType.valid())
         {
-            return EglBadAttribute() << "EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE requires a "
-                                        "device type of EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE or "
-                                        "EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE.";
+            switch (deviceType.value())
+            {
+                case EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_REFERENCE_ANGLE:
+                case EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE:
+                    if (platformType != EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE &&
+                        platformType != EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE)
+                    {
+                        return EglBadAttribute()
+                               << "This device type requires a "
+                                  "platform type of EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE or "
+                                  "EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE.";
+                    }
+                    break;
+                default:
+                    break;
+            }
         }
 
         if (platformType == EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE)
@@ -620,9 +619,9 @@ Error ValidateCreateContext(Display *display, Config *configuration, gl::Context
             break;
 
           case EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_KHR:
-            static_assert(EGL_LOSE_CONTEXT_ON_RESET_EXT == EGL_LOSE_CONTEXT_ON_RESET_KHR, "EGL extension enums not equal.");
-            static_assert(EGL_NO_RESET_NOTIFICATION_EXT == EGL_NO_RESET_NOTIFICATION_KHR, "EGL extension enums not equal.");
-            // same as EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT, fall through
+            return EglBadAttribute() << "EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_KHR is not"
+                                     << " valid for GLES with EGL 1.4 and KHR_create_context. Use"
+                                     << " EXT_create_context_robustness.";
           case EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT:
             if (!display->getExtensions().createContextRobustness)
             {
@@ -726,6 +725,19 @@ Error ValidateCreateContext(Display *display, Config *configuration, gl::Context
               }
               break;
 
+          case EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE:
+              if (!display->getExtensions().robustResourceInitialization)
+              {
+                  return EglBadAttribute() << "Attribute EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE "
+                                              "requires EGL_ANGLE_robust_resource_initialization.";
+              }
+              if (value != EGL_TRUE && value != EGL_FALSE)
+              {
+                  return EglBadAttribute() << "EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE must be "
+                                              "either EGL_TRUE or EGL_FALSE.";
+              }
+              break;
+
           default:
               return EglBadAttribute() << "Unknown attribute.";
         }
@@ -733,6 +745,13 @@ Error ValidateCreateContext(Display *display, Config *configuration, gl::Context
 
     switch (clientMajorVersion)
     {
+        case 1:
+            if (clientMinorVersion != 0 && clientMinorVersion != 1)
+            {
+                return EglBadConfig();
+            }
+            break;
+
         case 2:
             if (clientMinorVersion != 0)
             {
@@ -744,7 +763,7 @@ Error ValidateCreateContext(Display *display, Config *configuration, gl::Context
             {
                 return EglBadConfig();
             }
-            if (!(configuration->conformant & EGL_OPENGL_ES3_BIT_KHR))
+            if (!(configuration->renderableType & EGL_OPENGL_ES3_BIT_KHR))
             {
                 return EglBadConfig();
             }
@@ -875,6 +894,19 @@ Error ValidateCreateWindowSurface(Display *display, Config *config, EGLNativeWin
               }
               break;
 
+          case EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE:
+              if (!display->getExtensions().robustResourceInitialization)
+              {
+                  return EglBadAttribute() << "Attribute EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE "
+                                              "requires EGL_ANGLE_robust_resource_initialization.";
+              }
+              if (value != EGL_TRUE && value != EGL_FALSE)
+              {
+                  return EglBadAttribute() << "EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE must be "
+                                              "either EGL_TRUE or EGL_FALSE.";
+              }
+              break;
+
           default:
               return EglBadAttribute();
         }
@@ -953,6 +985,19 @@ Error ValidateCreatePbufferSurface(Display *display, Config *config, const Attri
               }
               break;
 
+          case EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE:
+              if (!display->getExtensions().robustResourceInitialization)
+              {
+                  return EglBadAttribute() << "Attribute EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE "
+                                              "requires EGL_ANGLE_robust_resource_initialization.";
+              }
+              if (value != EGL_TRUE && value != EGL_FALSE)
+              {
+                  return EglBadAttribute() << "EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE must be "
+                                              "either EGL_TRUE or EGL_FALSE.";
+              }
+              break;
+
           default:
               return EglBadAttribute();
         }
@@ -1021,6 +1066,18 @@ Error ValidateCreatePbufferFromClientBuffer(Display *display, EGLenum buftype, E
           }
           break;
 
+      case EGL_IOSURFACE_ANGLE:
+          if (!displayExtensions.iosurfaceClientBuffer)
+          {
+              return EglBadParameter() << "<buftype> EGL_IOSURFACE_ANGLE requires the "
+                                          "EGL_ANGLE_iosurface_client_buffer extension.";
+          }
+          if (buffer == nullptr)
+          {
+              return EglBadParameter() << "<buffer> must be non null";
+          }
+          break;
+
       default:
           return EglBadParameter();
     }
@@ -1032,56 +1089,99 @@ Error ValidateCreatePbufferFromClientBuffer(Display *display, EGLenum buftype, E
 
         switch (attribute)
         {
-          case EGL_WIDTH:
-          case EGL_HEIGHT:
-            if (!displayExtensions.d3dShareHandleClientBuffer)
-            {
-                return EglBadParameter();
-            }
-            if (value < 0)
-            {
-                return EglBadParameter();
-            }
-            break;
-
-          case EGL_TEXTURE_FORMAT:
-            switch (value)
-            {
-              case EGL_NO_TEXTURE:
-              case EGL_TEXTURE_RGB:
-              case EGL_TEXTURE_RGBA:
+            case EGL_WIDTH:
+            case EGL_HEIGHT:
+                if (buftype != EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE &&
+                    buftype != EGL_D3D_TEXTURE_ANGLE &&
+                    buftype != EGL_IOSURFACE_ANGLE)
+                {
+                    return EglBadParameter()
+                           << "Width and Height are not supported for thie <buftype>";
+                }
+                if (value < 0)
+                {
+                    return EglBadParameter() << "Width and Height must be positive";
+                }
                 break;
-              default:
-                  return EglBadAttribute();
-            }
-            break;
 
-          case EGL_TEXTURE_TARGET:
-            switch (value)
-            {
-              case EGL_NO_TEXTURE:
-              case EGL_TEXTURE_2D:
+            case EGL_TEXTURE_FORMAT:
+                switch (value)
+                {
+                    case EGL_NO_TEXTURE:
+                    case EGL_TEXTURE_RGB:
+                    case EGL_TEXTURE_RGBA:
+                        break;
+                    default:
+                        return EglBadAttribute() << "Invalid value for EGL_TEXTURE_FORMAT";
+                }
                 break;
-              default:
-                  return EglBadAttribute();
-            }
-            break;
 
-          case EGL_MIPMAP_TEXTURE:
-            break;
+            case EGL_TEXTURE_TARGET:
+                switch (value)
+                {
+                    case EGL_NO_TEXTURE:
+                    case EGL_TEXTURE_2D:
+                        break;
+                    case EGL_TEXTURE_RECTANGLE_ANGLE:
+                        if (buftype != EGL_IOSURFACE_ANGLE)
+                        {
+                            return EglBadParameter()
+                                   << "<buftype> doesn't support rectangle texture targets";
+                        }
+                        break;
 
-          case EGL_FLEXIBLE_SURFACE_COMPATIBILITY_SUPPORTED_ANGLE:
-              if (!displayExtensions.flexibleSurfaceCompatibility)
-              {
-                  return EglBadAttribute()
-                         << "EGL_FLEXIBLE_SURFACE_COMPATIBILITY_SUPPORTED_ANGLE cannot be used "
-                            "without EGL_ANGLE_flexible_surface_compatibility support.";
-              }
-              break;
+                    default:
+                        return EglBadAttribute() << "Invalid value for EGL_TEXTURE_TARGET";
+                }
+                break;
 
-          default:
-              return EglBadAttribute();
+            case EGL_MIPMAP_TEXTURE:
+                break;
+
+            case EGL_FLEXIBLE_SURFACE_COMPATIBILITY_SUPPORTED_ANGLE:
+                if (!displayExtensions.flexibleSurfaceCompatibility)
+                {
+                    return EglBadAttribute()
+                           << "EGL_FLEXIBLE_SURFACE_COMPATIBILITY_SUPPORTED_ANGLE cannot be used "
+                              "without EGL_ANGLE_flexible_surface_compatibility support.";
+                }
+                break;
+
+            case EGL_IOSURFACE_PLANE_ANGLE:
+                if (buftype != EGL_IOSURFACE_ANGLE)
+                {
+                    return EglBadAttribute() << "<buftype> doesn't support iosurface plane";
+                }
+                break;
+
+            case EGL_TEXTURE_TYPE_ANGLE:
+                if (buftype != EGL_IOSURFACE_ANGLE)
+                {
+                    return EglBadAttribute() << "<buftype> doesn't support texture type";
+                }
+                break;
+
+            case EGL_TEXTURE_INTERNAL_FORMAT_ANGLE:
+                if (buftype != EGL_IOSURFACE_ANGLE)
+                {
+                    return EglBadAttribute() << "<buftype> doesn't support texture internal format";
+                }
+                break;
+            case EGL_GL_COLORSPACE:
+                if (buftype != EGL_D3D_TEXTURE_ANGLE)
+                {
+                    return EglBadAttribute() << "<buftype> doesn't support setting GL colorspace";
+                }
+                break;
+            default:
+                return EglBadAttribute();
         }
+    }
+
+    EGLAttrib colorspace = attributes.get(EGL_GL_COLORSPACE, EGL_GL_COLORSPACE_LINEAR);
+    if (colorspace != EGL_GL_COLORSPACE_LINEAR && colorspace != EGL_GL_COLORSPACE_SRGB)
+    {
+        return EglBadAttribute() << "invalid GL colorspace";
     }
 
     if (!(config->surfaceType & EGL_PBUFFER_BIT))
@@ -1096,11 +1196,20 @@ Error ValidateCreatePbufferFromClientBuffer(Display *display, EGLenum buftype, E
     {
         return EglBadMatch();
     }
-
-    if ((textureFormat == EGL_TEXTURE_RGB  && config->bindToTextureRGB  != EGL_TRUE) ||
+    if ((textureFormat == EGL_TEXTURE_RGB && config->bindToTextureRGB != EGL_TRUE) ||
         (textureFormat == EGL_TEXTURE_RGBA && config->bindToTextureRGBA != EGL_TRUE))
     {
-        return EglBadAttribute();
+        // TODO(cwallez@chromium.org): For IOSurface pbuffers we require that EGL_TEXTURE_RGBA is
+        // set so that eglBindTexImage works. Normally this is only allowed if the config exposes
+        // the bindToTextureRGB/RGBA flag. This issue is that enabling this flags means that
+        // eglBindTexImage should also work for regular pbuffers which isn't implemented on macOS.
+        // Instead of adding the flag we special case the check here to be ignored for IOSurfaces.
+        // The TODO is to find a proper solution for this, maybe by implementing eglBindTexImage on
+        // OSX?
+        if (buftype != EGL_IOSURFACE_ANGLE)
+        {
+            return EglBadAttribute();
+        }
     }
 
     if (buftype == EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE)
@@ -1117,6 +1226,28 @@ Error ValidateCreatePbufferFromClientBuffer(Display *display, EGLenum buftype, E
         if (textureFormat != EGL_NO_TEXTURE && !caps.textureNPOT && (!gl::isPow2(width) || !gl::isPow2(height)))
         {
             return EglBadMatch();
+        }
+    }
+
+    if (buftype == EGL_IOSURFACE_ANGLE)
+    {
+        if (textureTarget != EGL_TEXTURE_RECTANGLE_ANGLE)
+        {
+            return EglBadAttribute() << "EGL_IOSURFACE requires the EGL_TEXTURE_RECTANGLE target";
+        }
+
+        if (textureFormat != EGL_TEXTURE_RGBA)
+        {
+            return EglBadAttribute() << "EGL_IOSURFACE requires the EGL_TEXTURE_RGBA format";
+        }
+
+        if (!attributes.contains(EGL_WIDTH) || !attributes.contains(EGL_HEIGHT) ||
+            !attributes.contains(EGL_TEXTURE_FORMAT) ||
+            !attributes.contains(EGL_TEXTURE_TYPE_ANGLE) ||
+            !attributes.contains(EGL_TEXTURE_INTERNAL_FORMAT_ANGLE) ||
+            !attributes.contains(EGL_IOSURFACE_PLANE_ANGLE))
+        {
+            return EglBadParameter() << "Missing required attribute for EGL_IOSURFACE";
         }
     }
 
@@ -1348,7 +1479,7 @@ Error ValidateCreateImageKHR(const Display *display,
 
             const gl::Texture *texture =
                 context->getTexture(egl_gl::EGLClientBufferToGLObjectHandle(buffer));
-            if (texture == nullptr || texture->getTarget() != GL_TEXTURE_2D)
+            if (texture == nullptr || texture->getType() != gl::TextureType::_2D)
             {
                 return EglBadParameter() << "target is not a 2D texture.";
             }
@@ -1359,8 +1490,8 @@ Error ValidateCreateImageKHR(const Display *display,
             }
 
             EGLAttrib level = attributes.get(EGL_GL_TEXTURE_LEVEL_KHR, 0);
-            if (texture->getWidth(GL_TEXTURE_2D, static_cast<size_t>(level)) == 0 ||
-                texture->getHeight(GL_TEXTURE_2D, static_cast<size_t>(level)) == 0)
+            if (texture->getWidth(gl::TextureTarget::_2D, static_cast<size_t>(level)) == 0 ||
+                texture->getHeight(gl::TextureTarget::_2D, static_cast<size_t>(level)) == 0)
             {
                 return EglBadParameter()
                        << "target 2D texture does not have a valid size at specified level.";
@@ -1390,7 +1521,7 @@ Error ValidateCreateImageKHR(const Display *display,
 
             const gl::Texture *texture =
                 context->getTexture(egl_gl::EGLClientBufferToGLObjectHandle(buffer));
-            if (texture == nullptr || texture->getTarget() != GL_TEXTURE_CUBE_MAP)
+            if (texture == nullptr || texture->getType() != gl::TextureType::CubeMap)
             {
                 return EglBadParameter() << "target is not a cubemap texture.";
             }
@@ -1401,7 +1532,7 @@ Error ValidateCreateImageKHR(const Display *display,
             }
 
             EGLAttrib level    = attributes.get(EGL_GL_TEXTURE_LEVEL_KHR, 0);
-            GLenum cubeMapFace = egl_gl::EGLCubeMapTargetToGLCubeMapTarget(target);
+            gl::TextureTarget cubeMapFace = egl_gl::EGLCubeMapTargetToCubeMapTarget(target);
             if (texture->getWidth(cubeMapFace, static_cast<size_t>(level)) == 0 ||
                 texture->getHeight(cubeMapFace, static_cast<size_t>(level)) == 0)
             {
@@ -1435,7 +1566,7 @@ Error ValidateCreateImageKHR(const Display *display,
 
             const gl::Texture *texture =
                 context->getTexture(egl_gl::EGLClientBufferToGLObjectHandle(buffer));
-            if (texture == nullptr || texture->getTarget() != GL_TEXTURE_3D)
+            if (texture == nullptr || texture->getType() != gl::TextureType::_3D)
             {
                 return EglBadParameter() << "target is not a 3D texture.";
             }
@@ -1447,16 +1578,16 @@ Error ValidateCreateImageKHR(const Display *display,
 
             EGLAttrib level   = attributes.get(EGL_GL_TEXTURE_LEVEL_KHR, 0);
             EGLAttrib zOffset = attributes.get(EGL_GL_TEXTURE_ZOFFSET_KHR, 0);
-            if (texture->getWidth(GL_TEXTURE_3D, static_cast<size_t>(level)) == 0 ||
-                texture->getHeight(GL_TEXTURE_3D, static_cast<size_t>(level)) == 0 ||
-                texture->getDepth(GL_TEXTURE_3D, static_cast<size_t>(level)) == 0)
+            if (texture->getWidth(gl::TextureTarget::_3D, static_cast<size_t>(level)) == 0 ||
+                texture->getHeight(gl::TextureTarget::_3D, static_cast<size_t>(level)) == 0 ||
+                texture->getDepth(gl::TextureTarget::_3D, static_cast<size_t>(level)) == 0)
             {
                 return EglBadParameter()
                        << "target 3D texture does not have a valid size at specified level.";
             }
 
             if (static_cast<size_t>(zOffset) >=
-                texture->getDepth(GL_TEXTURE_3D, static_cast<size_t>(level)))
+                texture->getDepth(gl::TextureTarget::_3D, static_cast<size_t>(level)))
             {
                 return EglBadParameter() << "target 3D texture does not have enough layers "
                                             "for the specified Z offset at the specified "
@@ -1690,7 +1821,7 @@ Error ValidateStreamConsumerGLTextureExternalKHR(const Display *display,
     }
 
     // Lookup the texture and ensure it is correct
-    gl::Texture *texture = context->getGLState().getTargetTexture(GL_TEXTURE_EXTERNAL_OES);
+    gl::Texture *texture = context->getGLState().getTargetTexture(gl::TextureType::External);
     if (texture == nullptr || texture->getId() == 0)
     {
         return EglBadAccess() << "No external texture bound";
@@ -1895,7 +2026,7 @@ Error ValidateStreamConsumerGLTextureExternalAttribsNV(const Display *display,
         }
 
         // Lookup the texture and ensure it is correct
-        gl::Texture *texture = context->getGLState().getTargetTexture(GL_TEXTURE_EXTERNAL_OES);
+        gl::Texture *texture = context->getGLState().getTargetTexture(gl::TextureType::External);
         if (texture == nullptr || texture->getId() == 0)
         {
             return EglBadAccess() << "No external texture bound";
@@ -1930,7 +2061,7 @@ Error ValidateStreamConsumerGLTextureExternalAttribsNV(const Display *display,
             if (plane[i] != EGL_NONE)
             {
                 gl::Texture *texture = context->getGLState().getSamplerTexture(
-                    static_cast<unsigned int>(plane[i]), GL_TEXTURE_EXTERNAL_OES);
+                    static_cast<unsigned int>(plane[i]), gl::TextureType::External);
                 if (texture == nullptr || texture->getId() == 0)
                 {
                     return EglBadAccess()
@@ -1948,14 +2079,14 @@ Error ValidateStreamConsumerGLTextureExternalAttribsNV(const Display *display,
     return NoError();
 }
 
-Error ValidateCreateStreamProducerD3DTextureNV12ANGLE(const Display *display,
-                                                      const Stream *stream,
-                                                      const AttributeMap &attribs)
+Error ValidateCreateStreamProducerD3DTextureANGLE(const Display *display,
+                                                  const Stream *stream,
+                                                  const AttributeMap &attribs)
 {
     ANGLE_TRY(ValidateDisplay(display));
 
     const DisplayExtensions &displayExtensions = display->getExtensions();
-    if (!displayExtensions.streamProducerD3DTextureNV12)
+    if (!displayExtensions.streamProducerD3DTexture)
     {
         return EglBadAccess() << "Stream producer extension not active";
     }
@@ -1972,24 +2103,38 @@ Error ValidateCreateStreamProducerD3DTextureNV12ANGLE(const Display *display,
         return EglBadState() << "Stream not in connecting state";
     }
 
-    if (stream->getConsumerType() != Stream::ConsumerType::GLTextureYUV ||
-        stream->getPlaneCount() != 2)
+    switch (stream->getConsumerType())
     {
-        return EglBadMatch() << "Incompatible stream consumer type";
+        case Stream::ConsumerType::GLTextureYUV:
+            if (stream->getPlaneCount() != 2)
+            {
+                return EglBadMatch() << "Incompatible stream consumer type";
+            }
+            break;
+
+        case Stream::ConsumerType::GLTextureRGB:
+            if (stream->getPlaneCount() != 1)
+            {
+                return EglBadMatch() << "Incompatible stream consumer type";
+            }
+            break;
+
+        default:
+            return EglBadMatch() << "Incompatible stream consumer type";
     }
 
     return NoError();
 }
 
-Error ValidateStreamPostD3DTextureNV12ANGLE(const Display *display,
-                                            const Stream *stream,
-                                            void *texture,
-                                            const AttributeMap &attribs)
+Error ValidateStreamPostD3DTextureANGLE(const Display *display,
+                                        const Stream *stream,
+                                        void *texture,
+                                        const AttributeMap &attribs)
 {
     ANGLE_TRY(ValidateDisplay(display));
 
     const DisplayExtensions &displayExtensions = display->getExtensions();
-    if (!displayExtensions.streamProducerD3DTextureNV12)
+    if (!displayExtensions.streamProducerD3DTexture)
     {
         return EglBadAccess() << "Stream producer extension not active";
     }
@@ -2009,6 +2154,12 @@ Error ValidateStreamPostD3DTextureNV12ANGLE(const Display *display,
                     return EglBadParameter() << "Invalid subresource index";
                 }
                 break;
+            case EGL_NATIVE_BUFFER_PLANE_OFFSET_IMG:
+                if (value < 0)
+                {
+                    return EglBadParameter() << "Invalid plane offset";
+                }
+                break;
             default:
                 return EglBadAttribute() << "Invalid attribute";
         }
@@ -2021,7 +2172,7 @@ Error ValidateStreamPostD3DTextureNV12ANGLE(const Display *display,
         return EglBadState() << "Stream not fully configured";
     }
 
-    if (stream->getProducerType() != Stream::ProducerType::D3D11TextureNV12)
+    if (stream->getProducerType() != Stream::ProducerType::D3D11Texture)
     {
         return EglBadMatch() << "Incompatible stream producer";
     }
@@ -2031,7 +2182,7 @@ Error ValidateStreamPostD3DTextureNV12ANGLE(const Display *display,
         return EglBadParameter() << "Texture is null";
     }
 
-    return stream->validateD3D11NV12Texture(texture);
+    return stream->validateD3D11Texture(texture, attribs);
 }
 
 Error ValidateGetSyncValuesCHROMIUM(const Display *display,
@@ -2323,6 +2474,7 @@ Error ValidateSurfaceAttrib(const Display *display,
                 default:
                     return EglBadAttribute() << "Invalid multisample resolve type.";
             }
+            break;
 
         case EGL_SWAP_BEHAVIOR:
             switch (value)
@@ -2341,6 +2493,7 @@ Error ValidateSurfaceAttrib(const Display *display,
                 default:
                     return EglBadAttribute() << "Invalid swap behaviour.";
             }
+            break;
 
         default:
             return EglBadAttribute() << "Invalid surface attribute.";
@@ -2426,8 +2579,49 @@ Error ValidateQuerySurface(const Display *display,
             }
             break;
 
+        case EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE:
+            if (!display->getExtensions().robustResourceInitialization)
+            {
+                return EglBadAttribute() << "EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE cannot be "
+                                            "used without EGL_ANGLE_robust_resource_initialization "
+                                            "support.";
+            }
+            break;
+
         default:
             return EglBadAttribute() << "Invalid surface attribute.";
+    }
+
+    return NoError();
+}
+
+Error ValidateQueryContext(const Display *display,
+                           const gl::Context *context,
+                           EGLint attribute,
+                           EGLint *value)
+{
+    ANGLE_TRY(ValidateDisplay(display));
+    ANGLE_TRY(ValidateContext(display, context));
+
+    switch (attribute)
+    {
+        case EGL_CONFIG_ID:
+        case EGL_CONTEXT_CLIENT_TYPE:
+        case EGL_CONTEXT_CLIENT_VERSION:
+        case EGL_RENDER_BUFFER:
+            break;
+
+        case EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE:
+            if (!display->getExtensions().robustResourceInitialization)
+            {
+                return EglBadAttribute() << "EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE cannot be "
+                                            "used without EGL_ANGLE_robust_resource_initialization "
+                                            "support.";
+            }
+            break;
+
+        default:
+            return EglBadAttribute() << "Invalid context attribute.";
     }
 
     return NoError();

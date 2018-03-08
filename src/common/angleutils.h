@@ -30,7 +30,7 @@ using Microsoft::WRL::ComPtr;
 class NonCopyable
 {
   protected:
-    NonCopyable() = default;
+    constexpr NonCopyable() = default;
     ~NonCopyable() = default;
 
   private:
@@ -39,46 +39,6 @@ class NonCopyable
 };
 
 extern const uintptr_t DirtyPointer;
-
-// Helper class for wrapping an onDestroy function.
-template <typename ObjT, typename ContextT>
-class UniqueObjectPointer : angle::NonCopyable
-{
-  public:
-    UniqueObjectPointer(const ContextT *context) : mObject(nullptr), mContext(context) {}
-    UniqueObjectPointer(ObjT *obj, const ContextT *context) : mObject(obj), mContext(context) {}
-    ~UniqueObjectPointer()
-    {
-        if (mObject)
-        {
-            mObject->onDestroy(mContext);
-        }
-    }
-
-    ObjT *operator->() const { return mObject; }
-
-    ObjT *release()
-    {
-        auto obj = mObject;
-        mObject  = nullptr;
-        return obj;
-    }
-
-    ObjT *get() const { return mObject; }
-
-    void reset(ObjT *obj)
-    {
-        if (mObject)
-        {
-            mObject->onDestroy(mContext);
-        }
-        mObject = obj;
-    }
-
-  private:
-    ObjT *mObject;
-    const ContextT *mContext;
-};
 
 }  // namespace angle
 
@@ -100,7 +60,7 @@ class WrappedArray final : angle::NonCopyable
     constexpr WrappedArray() : mArray(nullptr), mSize(0) {}
     constexpr WrappedArray(const T *data, size_t size) : mArray(data), mSize(size) {}
 
-    constexpr WrappedArray(WrappedArray &&other) : WrappedArray()
+    WrappedArray(WrappedArray &&other) : WrappedArray()
     {
         std::swap(mArray, other.mArray);
         std::swap(mSize, other.mSize);
@@ -200,23 +160,11 @@ inline const char* MakeStaticString(const std::string &str)
     return strings.insert(str).first->c_str();
 }
 
-inline std::string ArrayString(unsigned int i)
-{
-    // We assume UINT_MAX and GL_INVALID_INDEX are equal
-    // See DynamicHLSL.cpp
-    if (i == UINT_MAX)
-    {
-        return "";
-    }
+std::string ArrayString(unsigned int i);
 
-    std::stringstream strstr;
-
-    strstr << "[";
-    strstr << i;
-    strstr << "]";
-
-    return strstr.str();
-}
+// Indices are stored in vectors with the outermost index in the back. In the output of the function
+// the indices are reversed.
+std::string ArrayIndexString(const std::vector<unsigned int> &indices);
 
 inline std::string Str(int i)
 {
@@ -248,10 +196,15 @@ std::string ToString(const T &value)
 #define GL_BGRA4_ANGLEX 0x6ABC
 #define GL_BGR5_A1_ANGLEX 0x6ABD
 #define GL_INT_64_ANGLEX 0x6ABE
-#define GL_STRUCT_ANGLEX 0x6ABF
+#define GL_UINT_64_ANGLEX 0x6ABF
+#define GL_BGRA8_SRGB_ANGLEX 0x6AC0
 
-// Hidden enum for the NULL D3D device type.
-#define EGL_PLATFORM_ANGLE_DEVICE_TYPE_NULL_ANGLE 0x6AC0
+// These are dummy formats used to fit typeless D3D textures that can be bound to EGL pbuffers into
+// the format system (for extension EGL_ANGLE_d3d_texture_client_buffer):
+#define GL_RGBA8_TYPELESS_ANGLEX 0x6AC1
+#define GL_RGBA8_TYPELESS_SRGB_ANGLEX 0x6AC2
+#define GL_BGRA8_TYPELESS_ANGLEX 0x6AC3
+#define GL_BGRA8_TYPELESS_SRGB_ANGLEX 0x6AC4
 
 // TODO(jmadill): Clean this up at some point.
 #define EGL_PLATFORM_ANGLE_PLATFORM_METHODS_ANGLEX 0x9999
@@ -289,5 +242,16 @@ std::string ToString(const T &value)
 #ifndef ANGLE_MACRO_STRINGIFY
 #define ANGLE_MACRO_STRINGIFY(x) ANGLE_STRINGIFY(x)
 #endif
+
+// Detect support for C++17 [[nodiscard]]
+#if !defined(__has_cpp_attribute)
+#define __has_cpp_attribute(name) 0
+#endif  // !defined(__has_cpp_attribute)
+
+#if __has_cpp_attribute(nodiscard)
+#define ANGLE_NO_DISCARD [[nodiscard]]
+#else
+#define ANGLE_NO_DISCARD
+#endif  // __has_cpp_attribute(nodiscard)
 
 #endif // COMMON_ANGLEUTILS_H_

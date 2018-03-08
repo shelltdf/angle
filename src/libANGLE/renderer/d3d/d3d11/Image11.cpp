@@ -137,8 +137,7 @@ bool Image11::isDirty() const
     // recovered from TextureStorage AND the texture doesn't require init data (i.e. a blank new
     // texture will suffice) AND robust resource initialization is not enabled then isDirty should
     // still return false.
-    if (mDirty && !mStagingTexture.valid() && !mRecoverFromStorage &&
-        !mRenderer->isRobustResourceInitEnabled())
+    if (mDirty && !mStagingTexture.valid() && !mRecoverFromStorage)
     {
         const Renderer11DeviceCaps &deviceCaps = mRenderer->getRenderer11DeviceCaps();
         const auto &formatInfo                 = d3d11::Format::Get(mInternalFormat, deviceCaps);
@@ -229,7 +228,7 @@ void Image11::disassociateStorage()
     }
 }
 
-bool Image11::redefine(GLenum target,
+bool Image11::redefine(gl::TextureType type,
                        GLenum internalformat,
                        const gl::Extents &size,
                        bool forceRelease)
@@ -246,7 +245,7 @@ bool Image11::redefine(GLenum target,
         mHeight         = size.height;
         mDepth          = size.depth;
         mInternalFormat = internalformat;
-        mTarget         = target;
+        mType           = type;
 
         // compute the d3d format that will be used
         const d3d11::Format &formatInfo =
@@ -255,8 +254,7 @@ bool Image11::redefine(GLenum target,
         mRenderable = (formatInfo.rtvFormat != DXGI_FORMAT_UNKNOWN);
 
         releaseStagingTexture();
-        mDirty = (formatInfo.dataInitializerFunction != nullptr) ||
-                 mRenderer->isRobustResourceInitEnabled();
+        mDirty = (formatInfo.dataInitializerFunction != nullptr);
 
         return true;
     }
@@ -421,16 +419,20 @@ gl::Error Image11::copyFromFramebuffer(const gl::Context *context,
     {
         size_t bufferSize = destFormatInfo.pixelBytes * sourceArea.width * sourceArea.height;
         angle::MemoryBuffer *memoryBuffer = nullptr;
-        mRenderer->getScratchMemoryBuffer(bufferSize, &memoryBuffer);
-        GLuint memoryBufferRowPitch = destFormatInfo.pixelBytes * sourceArea.width;
+        error = mRenderer->getScratchMemoryBuffer(bufferSize, &memoryBuffer);
 
-        error = mRenderer->readFromAttachment(
-            context, *srcAttachment, sourceArea, destFormatInfo.format, destFormatInfo.type,
-            memoryBufferRowPitch, gl::PixelPackState(), memoryBuffer->data());
+        if (!error.isError())
+        {
+            GLuint memoryBufferRowPitch = destFormatInfo.pixelBytes * sourceArea.width;
 
-        loadFunction.loadFunction(sourceArea.width, sourceArea.height, 1, memoryBuffer->data(),
-                                  memoryBufferRowPitch, 0, dataOffset, mappedImage.RowPitch,
-                                  mappedImage.DepthPitch);
+            error = mRenderer->readFromAttachment(
+                context, *srcAttachment, sourceArea, destFormatInfo.format, destFormatInfo.type,
+                memoryBufferRowPitch, gl::PixelPackState(), memoryBuffer->data());
+
+            loadFunction.loadFunction(sourceArea.width, sourceArea.height, 1, memoryBuffer->data(),
+                                      memoryBufferRowPitch, 0, dataOffset, mappedImage.RowPitch,
+                                      mappedImage.DepthPitch);
+        }
     }
     else
     {
@@ -538,74 +540,82 @@ gl::Error Image11::createStagingTexture()
     // adjust size if needed for compressed textures
     d3d11::MakeValidSize(false, dxgiFormat, &width, &height, &lodOffset);
 
-    if (mTarget == GL_TEXTURE_3D)
+    switch (mType)
     {
-        D3D11_TEXTURE3D_DESC desc;
-        desc.Width          = width;
-        desc.Height         = height;
-        desc.Depth          = mDepth;
-        desc.MipLevels      = lodOffset + 1;
-        desc.Format         = dxgiFormat;
-        desc.Usage          = D3D11_USAGE_STAGING;
-        desc.BindFlags      = 0;
-        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
-        desc.MiscFlags      = 0;
-
-        if (formatInfo.dataInitializerFunction != nullptr)
+        case gl::TextureType::_3D:
         {
-            std::vector<D3D11_SUBRESOURCE_DATA> initialData;
-            std::vector<std::vector<BYTE>> textureData;
-            d3d11::GenerateInitialTextureData(mInternalFormat, mRenderer->getRenderer11DeviceCaps(),
-                                              width, height, mDepth, lodOffset + 1, &initialData,
-                                              &textureData);
+            D3D11_TEXTURE3D_DESC desc;
+            desc.Width          = width;
+            desc.Height         = height;
+            desc.Depth          = mDepth;
+            desc.MipLevels      = lodOffset + 1;
+            desc.Format         = dxgiFormat;
+            desc.Usage          = D3D11_USAGE_STAGING;
+            desc.BindFlags      = 0;
+            desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
+            desc.MiscFlags      = 0;
 
-            ANGLE_TRY(
-                mRenderer->allocateTexture(desc, formatInfo, initialData.data(), &mStagingTexture));
+            if (formatInfo.dataInitializerFunction != nullptr)
+            {
+                std::vector<D3D11_SUBRESOURCE_DATA> initialData;
+                std::vector<std::vector<BYTE>> textureData;
+                d3d11::GenerateInitialTextureData(
+                    mInternalFormat, mRenderer->getRenderer11DeviceCaps(), width, height, mDepth,
+                    lodOffset + 1, &initialData, &textureData);
+
+                ANGLE_TRY(mRenderer->allocateTexture(desc, formatInfo, initialData.data(),
+                                                     &mStagingTexture));
+            }
+            else
+            {
+                ANGLE_TRY(mRenderer->allocateTexture(desc, formatInfo, &mStagingTexture));
+            }
+
+            mStagingTexture.setDebugName("Image11::StagingTexture3D");
+            mStagingSubresource = D3D11CalcSubresource(lodOffset, 0, lodOffset + 1);
         }
-        else
+        break;
+
+        case gl::TextureType::_2D:
+        case gl::TextureType::_2DArray:
+        case gl::TextureType::CubeMap:
         {
-            ANGLE_TRY(mRenderer->allocateTexture(desc, formatInfo, &mStagingTexture));
+            D3D11_TEXTURE2D_DESC desc;
+            desc.Width              = width;
+            desc.Height             = height;
+            desc.MipLevels          = lodOffset + 1;
+            desc.ArraySize          = 1;
+            desc.Format             = dxgiFormat;
+            desc.SampleDesc.Count   = 1;
+            desc.SampleDesc.Quality = 0;
+            desc.Usage              = D3D11_USAGE_STAGING;
+            desc.BindFlags          = 0;
+            desc.CPUAccessFlags     = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
+            desc.MiscFlags          = 0;
+
+            if (formatInfo.dataInitializerFunction != nullptr)
+            {
+                std::vector<D3D11_SUBRESOURCE_DATA> initialData;
+                std::vector<std::vector<BYTE>> textureData;
+                d3d11::GenerateInitialTextureData(
+                    mInternalFormat, mRenderer->getRenderer11DeviceCaps(), width, height, 1,
+                    lodOffset + 1, &initialData, &textureData);
+
+                ANGLE_TRY(mRenderer->allocateTexture(desc, formatInfo, initialData.data(),
+                                                     &mStagingTexture));
+            }
+            else
+            {
+                ANGLE_TRY(mRenderer->allocateTexture(desc, formatInfo, &mStagingTexture));
+            }
+
+            mStagingTexture.setDebugName("Image11::StagingTexture2D");
+            mStagingSubresource = D3D11CalcSubresource(lodOffset, 0, lodOffset + 1);
         }
+        break;
 
-        mStagingSubresource = D3D11CalcSubresource(lodOffset, 0, lodOffset + 1);
-    }
-    else if (mTarget == GL_TEXTURE_2D || mTarget == GL_TEXTURE_2D_ARRAY ||
-             mTarget == GL_TEXTURE_CUBE_MAP)
-    {
-        D3D11_TEXTURE2D_DESC desc;
-        desc.Width              = width;
-        desc.Height             = height;
-        desc.MipLevels          = lodOffset + 1;
-        desc.ArraySize          = 1;
-        desc.Format             = dxgiFormat;
-        desc.SampleDesc.Count   = 1;
-        desc.SampleDesc.Quality = 0;
-        desc.Usage              = D3D11_USAGE_STAGING;
-        desc.BindFlags          = 0;
-        desc.CPUAccessFlags     = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
-        desc.MiscFlags          = 0;
-
-        if (formatInfo.dataInitializerFunction != nullptr)
-        {
-            std::vector<D3D11_SUBRESOURCE_DATA> initialData;
-            std::vector<std::vector<BYTE>> textureData;
-            d3d11::GenerateInitialTextureData(mInternalFormat, mRenderer->getRenderer11DeviceCaps(),
-                                              width, height, 1, lodOffset + 1, &initialData,
-                                              &textureData);
-
-            ANGLE_TRY(
-                mRenderer->allocateTexture(desc, formatInfo, initialData.data(), &mStagingTexture));
-        }
-        else
-        {
-            ANGLE_TRY(mRenderer->allocateTexture(desc, formatInfo, &mStagingTexture));
-        }
-
-        mStagingSubresource = D3D11CalcSubresource(lodOffset, 0, lodOffset + 1);
-    }
-    else
-    {
-        UNREACHABLE();
+        default:
+            UNREACHABLE();
     }
 
     mDirty = false;
@@ -621,20 +631,9 @@ gl::Error Image11::map(const gl::Context *context, D3D11_MAP mapType, D3D11_MAPP
     unsigned int subresourceIndex  = 0;
     ANGLE_TRY(getStagingTexture(&stagingTexture, &subresourceIndex));
 
-    ID3D11DeviceContext *deviceContext = mRenderer->getDeviceContext();
-
     ASSERT(stagingTexture && stagingTexture->valid());
-    HRESULT result = deviceContext->Map(stagingTexture->get(), subresourceIndex, mapType, 0, map);
 
-    if (FAILED(result))
-    {
-        // this can fail if the device is removed (from TDR)
-        if (d3d11::isDeviceLostError(result))
-        {
-            mRenderer->notifyDeviceLost();
-        }
-        return gl::OutOfMemory() << "Failed to map staging texture, " << gl::FmtHR(result);
-    }
+    ANGLE_TRY(mRenderer->mapResource(stagingTexture->get(), subresourceIndex, mapType, 0, map));
 
     mDirty = true;
 

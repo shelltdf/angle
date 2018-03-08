@@ -24,7 +24,6 @@
 
 namespace rx
 {
-
 Framebuffer9::Framebuffer9(const gl::FramebufferState &data, Renderer9 *renderer)
     : FramebufferD3D(data, renderer), mRenderer(renderer)
 {
@@ -61,10 +60,8 @@ gl::Error Framebuffer9::invalidateSub(const gl::Context *context,
 
 gl::Error Framebuffer9::clearImpl(const gl::Context *context, const ClearParameters &clearParams)
 {
-    const gl::FramebufferAttachment *colorAttachment        = mState.getColorAttachment(0);
-    const gl::FramebufferAttachment *depthStencilAttachment = mState.getDepthOrStencilAttachment();
-
-    ANGLE_TRY(mRenderer->applyRenderTarget(context, colorAttachment, depthStencilAttachment));
+    ANGLE_TRY(mRenderer->applyRenderTarget(context, mRenderTargetCache.getColors()[0],
+                                           mRenderTargetCache.getDepthStencil()));
 
     const gl::State &glState = context->getGLState();
     float nearZ              = glState.getNearPlane();
@@ -74,7 +71,8 @@ gl::Error Framebuffer9::clearImpl(const gl::Context *context, const ClearParamet
 
     mRenderer->setScissorRectangle(glState.getScissor(), glState.isScissorTestEnabled());
 
-    return mRenderer->clear(context, clearParams, colorAttachment, depthStencilAttachment);
+    return mRenderer->clear(context, clearParams, mRenderTargetCache.getColors()[0],
+                            mRenderTargetCache.getDepthStencil());
 }
 
 gl::Error Framebuffer9::readPixelsImpl(const gl::Context *context,
@@ -83,10 +81,8 @@ gl::Error Framebuffer9::readPixelsImpl(const gl::Context *context,
                                        GLenum type,
                                        size_t outputPitch,
                                        const gl::PixelPackState &pack,
-                                       uint8_t *pixels) const
+                                       uint8_t *pixels)
 {
-    ASSERT(pack.pixelBuffer.get() == nullptr);
-
     const gl::FramebufferAttachment *colorbuffer = mState.getColorAttachment(0);
     ASSERT(colorbuffer);
 
@@ -113,15 +109,17 @@ gl::Error Framebuffer9::readPixelsImpl(const gl::Context *context,
 
     HRESULT result;
     IDirect3DSurface9 *systemSurface = nullptr;
-    bool directToPixels = !pack.reverseRowOrder && pack.alignment <= 4 && mRenderer->getShareHandleSupport() &&
-                          area.x == 0 && area.y == 0 &&
-                          static_cast<UINT>(area.width) == desc.Width && static_cast<UINT>(area.height) == desc.Height &&
-                          desc.Format == D3DFMT_A8R8G8B8 && format == GL_BGRA_EXT && type == GL_UNSIGNED_BYTE;
+    bool directToPixels =
+        !pack.reverseRowOrder && pack.alignment <= 4 && mRenderer->getShareHandleSupport() &&
+        area.x == 0 && area.y == 0 && static_cast<UINT>(area.width) == desc.Width &&
+        static_cast<UINT>(area.height) == desc.Height && desc.Format == D3DFMT_A8R8G8B8 &&
+        format == GL_BGRA_EXT && type == GL_UNSIGNED_BYTE;
     if (directToPixels)
     {
         // Use the pixels ptr as a shared handle to write directly into client's memory
         result = device->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format,
-                                                     D3DPOOL_SYSTEMMEM, &systemSurface, reinterpret_cast<void**>(&pixels));
+                                                     D3DPOOL_SYSTEMMEM, &systemSurface,
+                                                     reinterpret_cast<void **>(&pixels));
         if (FAILED(result))
         {
             // Try again without the shared handle
@@ -191,7 +189,6 @@ gl::Error Framebuffer9::readPixelsImpl(const gl::Context *context,
     const d3d9::D3DFormat &d3dFormatInfo = d3d9::GetD3DFormatInfo(desc.Format);
     gl::FormatType formatType(format, type);
 
-    // TODO(jmadill): Maybe we can avoid a copy of pack parameters here?
     PackPixelsParams packParams;
     packParams.area.x      = rect.left;
     packParams.area.y      = rect.top;
@@ -200,7 +197,7 @@ gl::Error Framebuffer9::readPixelsImpl(const gl::Context *context,
     packParams.format      = format;
     packParams.type        = type;
     packParams.outputPitch = static_cast<GLuint>(outputPitch);
-    packParams.pack.copyFrom(context, pack);
+    packParams.pack        = pack;
 
     PackPixels(packParams, d3dFormatInfo.info(), inputPitch, source, pixels);
 
@@ -405,4 +402,17 @@ GLenum Framebuffer9::getRenderTargetImplementationFormat(RenderTargetD3D *render
     return d3dFormatInfo.info().glInternalFormat;
 }
 
+gl::Error Framebuffer9::getSamplePosition(size_t index, GLfloat *xy) const
+{
+    UNREACHABLE();
+    return gl::InternalError() << "getSamplePosition is unsupported to d3d9.";
+}
+
+gl::Error Framebuffer9::syncState(const gl::Context *context,
+                                  const gl::Framebuffer::DirtyBits &dirtyBits)
+{
+    ANGLE_TRY(FramebufferD3D::syncState(context, dirtyBits));
+    ANGLE_TRY(mRenderTargetCache.update(context, mState, dirtyBits));
+    return gl::NoError();
+}
 }  // namespace rx

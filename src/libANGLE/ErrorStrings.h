@@ -26,6 +26,9 @@ ERRMSG(CubemapIncomplete,
 ERRMSG(DefaultFramebufferInvalidAttachment,
        "Invalid attachment when the default framebuffer is bound.");
 ERRMSG(DefaultFramebufferTarget, "It is invalid to change default FBO's attachments");
+ERRMSG(DispatchIndirectBufferNotBound, "Dispatch indirect buffer must be bound.");
+ERRMSG(DrawBufferTypeMismatch,
+       "Fragment shader output type does not match the bound framebuffer attachment type.");
 ERRMSG(EnumNotSupported, "Enum is not currently supported.");
 ERRMSG(EnumRequiresGLES31, "Enum requires GLES 3.1");
 ERRMSG(ES31Required, "OpenGL ES 3.1 Required");
@@ -37,13 +40,15 @@ ERRMSG(ExtensionNotEnabled, "Extension is not enabled.");
 ERRMSG(FeedbackLoop, "Feedback loop formed between Framebuffer and active Texture.");
 ERRMSG(FramebufferIncompleteAttachment,
        "Attachment type must be compatible with attachment object.");
-ERRMSG(GenerateMipmapNotAllowed, "Compressed textures do not support mipmap generation.");
+ERRMSG(GenerateMipmapNotAllowed, "Texture format does not support mipmap generation.");
 ERRMSG(IndexExceedsMaxActiveUniform, "Index exceeds program active uniform count.");
 ERRMSG(IndexExceedsMaxDrawBuffer, "Index exceeds MAX_DRAW_BUFFERS.");
 ERRMSG(IndexExceedsMaxVertexAttribute, "Index exceeds MAX_VERTEX_ATTRIBS.");
 ERRMSG(InsufficientBufferSize, "Insufficient buffer size.");
 ERRMSG(InsufficientVertexBufferSize, "Vertex buffer is not big enough for the draw call");
 ERRMSG(IntegerOverflow, "Integer overflow.");
+ERRMSG(InternalFormatRequiresTexture2DArray,
+       "internalformat is an ETC2/EAC format and target is not GL_TEXTURE_2D_ARRAY.");
 ERRMSG(InvalidAttachment, "Invalid Attachment Type.");
 ERRMSG(InvalidBlendEquation, "Invalid blend equation.");
 ERRMSG(InvalidBlendFunction, "Invalid blend function.");
@@ -64,14 +69,19 @@ ERRMSG(InvalidDepthRange, "Near value cannot be greater than far.");
 ERRMSG(InvalidDrawMode, "Invalid draw mode.");
 ERRMSG(InvalidDrawModeTransformFeedback,
        "Draw mode must match current transform feedback object's draw mode.");
+ERRMSG(InvalidFence, "Invalid fence object.");
+ERRMSG(InvalidFenceState, "Fence must be set.");
 ERRMSG(InvalidFillMode, "Invalid fill mode.");
 ERRMSG(InvalidFilterTexture, "Texture only supports NEAREST and LINEAR filtering.");
 ERRMSG(InvalidFormat, "Invalid format.");
 ERRMSG(InvalidFramebufferTarget, "Invalid framebuffer target.");
 ERRMSG(InvalidFramebufferTextureLevel, "Mipmap level must be 0 when attaching a texture.");
-ERRMSG(InvalidFramebufferTextureParameter, "Invalid parameter name for framebuffer attachment.");
+ERRMSG(InvalidFramebufferAttachmentParameter, "Invalid parameter name for framebuffer attachment.");
+ERRMSG(InvalidImageUnit,
+       "Image unit cannot be greater than or equal to the value of MAX_IMAGE_UNITS.");
 ERRMSG(InvalidInternalFormat, "Invalid internal format.");
 ERRMSG(InvalidMatrixMode, "Invalid matrix mode.");
+ERRMSG(InvalidMemoryBarrierBit, "Invalid memory barrier bit.");
 ERRMSG(InvalidMipLevel, "Level of detail outside of range.");
 ERRMSG(InvalidName, "Invalid name.");
 ERRMSG(InvalidNameCharacters, "Name contains invalid characters.");
@@ -87,6 +97,8 @@ ERRMSG(InvalidRenderbufferTarget, "Invalid renderbuffer target.");
 ERRMSG(InvalidRenderbufferTextureParameter, "Invalid parameter name for renderbuffer attachment.");
 ERRMSG(InvalidRenderbufferWidthHeight,
        "Renderbuffer width and height cannot be negative and cannot exceed maximum texture size.");
+ERRMSG(InvalidSampleMaskNumber,
+       "MaskNumber cannot be greater than or equal to the value of MAX_SAMPLE_MASK_WORDS.");
 ERRMSG(InvalidSampler, "Sampler is not valid");
 ERRMSG(InvalidShaderName, "Shader object expected.");
 ERRMSG(InvalidShaderType, "Invalid shader type.");
@@ -104,6 +116,7 @@ ERRMSG(InvalidVertexAttrSize, "Vertex attribute size must be 1, 2, 3, or 4.");
 ERRMSG(InvalidWidth, "Invalid width.");
 ERRMSG(InvalidWrapModeTexture, "Invalid wrap mode for texture type.");
 ERRMSG(LevelNotZero, "Texture level must be zero.");
+ERRMSG(MismatchedByteCountType, "Buffer size does not align with data type.");
 ERRMSG(MismatchedFormat, "Format must match internal format.");
 ERRMSG(MismatchedTargetAndFormat, "Invalid texture target and format combination.");
 ERRMSG(MismatchedTypeAndFormat, "Invalid format and type combination.");
@@ -121,13 +134,21 @@ ERRMSG(NegativePrimcount, "Primcount must be greater than or equal to zero.");
 ERRMSG(NegativeSize, "Cannot have negative height or width.");
 ERRMSG(NegativeStart, "Cannot have negative start.");
 ERRMSG(NegativeStride, "Cannot have negative stride.");
+ERRMSG(NoActiveComputeShaderStage, "No active compute shader stage in this program.");
+ERRMSG(NoActiveProgramWithComputeShader, "No active program for the compute shader stage.");
 ERRMSG(NoSuchPath, "No such path object.");
+ERRMSG(NoTransformFeedbackOutputVariables,
+    "The active program has specified no output variables to record.");
 ERRMSG(NoZeroDivisor, "At least one enabled attribute must have a divisor of zero.");
+ERRMSG(NVFenceNotSupported, "GL_NV_fence is not supported");
 ERRMSG(ObjectNotGenerated, "Object cannot be used because it has not been generated.");
 ERRMSG(OffsetMustBeMultipleOfType, "Offset must be a multiple of the passed in datatype.");
+ERRMSG(OffsetMustBeMultipleOfUint,
+       "Offset must be a multiple of the size, in basic machine units, of uint");
 ERRMSG(OutsideOfBounds, "Parameter outside of bounds.");
 ERRMSG(ParamOverflow, "The provided parameters overflow with the provided buffer.");
 ERRMSG(PixelDataNotNull, "Pixel data must be null.");
+ERRMSG(PixelDataNull, "Pixel data cannot be null.");
 ERRMSG(ProgramDoesNotExist, "Program doesn't exist.");
 ERRMSG(ProgramNotBound, "A program must be bound.");
 ERRMSG(ProgramNotLinked, "Program not linked.");
@@ -147,6 +168,7 @@ ERRMSG(StencilReferenceMaskOrMismatch,
 ERRMSG(StrideMustBeMultipleOfType, "Stride must be a multiple of the passed in datatype.");
 ERRMSG(TextureNotBound, "A texture must be bound.");
 ERRMSG(TextureNotPow2, "The texture is a non-power-of-two texture.");
+ERRMSG(TransformFeedbackDoesNotExist, "Transform feedback object that does not exist.");
 ERRMSG(TypeMismatch,
        "Passed in texture target and format must match the one originally used to define the "
        "texture.");
@@ -155,9 +177,14 @@ ERRMSG(UniformSizeMismatch, "Uniform size does not match uniform method.");
 ERRMSG(UnknownParameter, "Unknown parameter value.");
 ERRMSG(VertexArrayNoBuffer, "An enabled vertex array has no buffer.");
 ERRMSG(VertexArrayNoBufferPointer, "An enabled vertex array has no buffer and no pointer.");
+ERRMSG(VertexShaderTypeMismatch,
+       "Vertex shader input type does not match the type of the bound vertex attribute.")
 ERRMSG(ViewportNegativeSize, "Viewport size cannot be negative.");
+ERRMSG(Webgl2NameLengthLimitExceeded, "Location lengths must not be greater than 1024 characters.");
 ERRMSG(WebglBindAttribLocationReservedPrefix,
        "Attributes that begin with 'webgl_', or '_webgl_' are not allowed.");
+ERRMSG(WebglNameLengthLimitExceeded,
+       "Location name lengths must not be greater than 256 characters.");
 }
 #undef ERRMSG
 #endif  // LIBANGLE_ERRORSTRINGS_H_

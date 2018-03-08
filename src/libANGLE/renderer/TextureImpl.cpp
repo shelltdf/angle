@@ -19,8 +19,13 @@ TextureImpl::~TextureImpl()
 {
 }
 
+gl::Error TextureImpl::onDestroy(const gl::Context *context)
+{
+    return gl::NoError();
+}
+
 gl::Error TextureImpl::copyTexture(const gl::Context *context,
-                                   GLenum target,
+                                   gl::TextureTarget target,
                                    size_t level,
                                    GLenum internalFormat,
                                    GLenum type,
@@ -35,7 +40,7 @@ gl::Error TextureImpl::copyTexture(const gl::Context *context,
 }
 
 gl::Error TextureImpl::copySubTexture(const gl::Context *context,
-                                      GLenum target,
+                                      gl::TextureTarget target,
                                       size_t level,
                                       const gl::Offset &destOffset,
                                       size_t sourceLevel,

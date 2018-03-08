@@ -52,13 +52,6 @@ TEST_P(TextureRectangleTest, TexImage2D)
 {
     ANGLE_SKIP_TEST_IF(!checkExtensionSupported());
 
-    if ((IsLinux() || IsWindows()) && IsNVIDIA() && IsDesktopOpenGL())
-    {
-        // TODO(cwallez): Investigate the failure (http://anglebug.com/2122)
-        std::cout << "Test disabled on Linux and Windows NVIDIA OpenGL." << std::endl;
-        return;
-    }
-
     GLTexture tex;
     glBindTexture(GL_TEXTURE_RECTANGLE_ANGLE, tex);
 
@@ -76,9 +69,14 @@ TEST_P(TextureRectangleTest, TexImage2D)
     glGetIntegerv(GL_MAX_RECTANGLE_TEXTURE_SIZE_ANGLE, &maxSize);
 
     // Defining a texture of the max size is allowed
-    glTexImage2D(GL_TEXTURE_RECTANGLE_ANGLE, 0, GL_RGBA, maxSize, maxSize, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, nullptr);
-    ASSERT_GL_NO_ERROR();
+    {
+        ScopedIgnorePlatformMessages ignore(this);
+
+        glTexImage2D(GL_TEXTURE_RECTANGLE_ANGLE, 0, GL_RGBA, maxSize, maxSize, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, nullptr);
+        GLenum error = glGetError();
+        ASSERT_TRUE(error == GL_NO_ERROR || error == GL_OUT_OF_MEMORY);
+    }
 
     // Defining a texture of the max size is allowed
     glTexImage2D(GL_TEXTURE_RECTANGLE_ANGLE, 0, GL_RGBA, maxSize + 1, maxSize, 0, GL_RGBA,
@@ -122,13 +120,6 @@ TEST_P(TextureRectangleTest, TexStorage2D)
     ANGLE_SKIP_TEST_IF(!checkExtensionSupported());
     ANGLE_SKIP_TEST_IF(getClientMajorVersion() < 3 && !extensionEnabled("GL_EXT_texture_storage"));
 
-    if ((IsLinux() || IsWindows()) && IsNVIDIA() && IsDesktopOpenGL())
-    {
-        // TODO(cwallez): Investigate the failure (http://anglebug.com/2122)
-        std::cout << "Test disabled on Linux and Windows NVIDIA OpenGL." << std::endl;
-        return;
-    }
-
     bool useES3       = getClientMajorVersion() >= 3;
     auto TexStorage2D = [useES3](GLenum target, GLint levels, GLenum format, GLint width,
                                  GLint height) {
@@ -163,15 +154,18 @@ TEST_P(TextureRectangleTest, TexStorage2D)
     GLint maxSize = 0;
     glGetIntegerv(GL_MAX_RECTANGLE_TEXTURE_SIZE_ANGLE, &maxSize);
 
-    // Defining a texture of the max size is allowed
+    // Defining a texture of the max size is allowed but still allow for OOM
     {
+        ScopedIgnorePlatformMessages ignore(this);
+
         GLTexture tex;
         glBindTexture(GL_TEXTURE_RECTANGLE_ANGLE, tex);
         TexStorage2D(GL_TEXTURE_RECTANGLE_ANGLE, 1, GL_RGBA8UI, maxSize, maxSize);
-        ASSERT_GL_NO_ERROR();
+        GLenum error = glGetError();
+        ASSERT_TRUE(error == GL_NO_ERROR || error == GL_OUT_OF_MEMORY);
     }
 
-    // Defining a texture of the max size is allowed
+    // Defining a texture of the max size is disallowed
     {
         GLTexture tex;
         glBindTexture(GL_TEXTURE_RECTANGLE_ANGLE, tex);
@@ -287,8 +281,8 @@ TEST_P(TextureRectangleTest, FramebufferTexture2DLevel)
     ASSERT_GL_ERROR(GL_INVALID_VALUE);
 }
 
-// Test sampling from a rectangle texture
-TEST_P(TextureRectangleTest, SamplingFromRectangle)
+// Test sampling from a rectangle texture using texture2DRect in ESSL1
+TEST_P(TextureRectangleTest, SamplingFromRectangleESSL1)
 {
     ANGLE_SKIP_TEST_IF(!checkExtensionSupported());
 
@@ -314,6 +308,54 @@ TEST_P(TextureRectangleTest, SamplingFromRectangle)
         "}\n";
 
     ANGLE_GL_PROGRAM(program, vs, fs);
+    glUseProgram(program);
+
+    GLint location = glGetUniformLocation(program, "tex");
+    ASSERT_NE(-1, location);
+    glUniform1i(location, 0);
+
+    glClearColor(0.0, 0.0, 0.0, 0.0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    drawQuad(program, "position", 0.5f, 1.0f, false);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test sampling from a rectangle texture using the texture overload in ESSL3
+TEST_P(TextureRectangleTestES3, SamplingFromRectangleESSL3)
+{
+    ANGLE_SKIP_TEST_IF(!checkExtensionSupported());
+
+    GLTexture tex;
+    glBindTexture(GL_TEXTURE_RECTANGLE_ANGLE, tex);
+    glTexImage2D(GL_TEXTURE_RECTANGLE_ANGLE, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 &GLColor::green);
+
+    const std::string vs =
+        "#version 300 es\n"
+        "in vec4 position;\n"
+        "void main()\n"
+        "{\n"
+        "    gl_Position = vec4(position.xy, 0.0, 1.0);\n"
+        "}\n";
+
+    const std::string fs =
+        "#version 300 es\n"
+        "#extension GL_ARB_texture_rectangle : require\n"
+        "precision mediump float;\n"
+        "uniform sampler2DRect tex;\n"
+        "out vec4 fragColor;\n"
+        "void main()\n"
+        "{\n"
+        "    fragColor = texture(tex, vec2(0, 0));\n"
+        "}\n";
+
+    ANGLE_GL_PROGRAM(program, vs, fs);
+    glUseProgram(program);
+
+    GLint location = glGetUniformLocation(program, "tex");
+    ASSERT_NE(-1, location);
+    glUniform1i(location, 0);
 
     glClearColor(0.0, 0.0, 0.0, 0.0);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -344,6 +386,26 @@ TEST_P(TextureRectangleTest, RenderToRectangle)
     glClear(GL_COLOR_BUFFER_BIT);
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
     ASSERT_GL_NO_ERROR();
+}
+
+TEST_P(TextureRectangleTest, DefaultSamplerParameters)
+{
+    ANGLE_SKIP_TEST_IF(!checkExtensionSupported());
+
+    GLTexture tex;
+    glBindTexture(GL_TEXTURE_RECTANGLE_ANGLE, tex);
+
+    GLint minFilter = 0;
+    glGetTexParameteriv(GL_TEXTURE_RECTANGLE_ANGLE, GL_TEXTURE_MIN_FILTER, &minFilter);
+    EXPECT_EQ(GL_LINEAR, minFilter);
+
+    GLint wrapS = 0;
+    glGetTexParameteriv(GL_TEXTURE_RECTANGLE_ANGLE, GL_TEXTURE_WRAP_S, &wrapS);
+    EXPECT_EQ(GL_CLAMP_TO_EDGE, wrapS);
+
+    GLint wrapT = 0;
+    glGetTexParameteriv(GL_TEXTURE_RECTANGLE_ANGLE, GL_TEXTURE_WRAP_T, &wrapT);
+    EXPECT_EQ(GL_CLAMP_TO_EDGE, wrapT);
 }
 
 // Test glCopyTexImage with rectangle textures

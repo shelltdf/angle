@@ -15,7 +15,6 @@
 #include "libANGLE/angletypes.h"
 #include "libANGLE/Error.h"
 #include "libANGLE/ImageIndex.h"
-#include "libANGLE/signal_utils.h"
 
 namespace egl
 {
@@ -36,12 +35,23 @@ class FramebufferAttachmentRenderTarget : angle::NonCopyable
 class FramebufferAttachmentObjectImpl;
 }
 
+namespace angle
+{
+class Subject;
+}  // namespace angle
+
 namespace gl
 {
 class FramebufferAttachmentObject;
 struct Format;
 class Renderbuffer;
 class Texture;
+
+enum class InitState
+{
+    MayNeedInit,
+    Initialized,
+};
 
 // FramebufferAttachment implements a GL framebuffer attachment.
 // Attachments are "light" containers, which store pointers to ref-counted GL objects.
@@ -94,7 +104,7 @@ class FramebufferAttachment final
 
     // These methods are only legal to call on Texture attachments
     const ImageIndex &getTextureImageIndex() const;
-    GLenum cubeMapFace() const;
+    TextureTarget cubeMapFace() const;
     GLint mipLevel() const;
     GLint layer() const;
     GLsizei getNumViews() const;
@@ -115,6 +125,9 @@ class FramebufferAttachment final
     Texture *getTexture() const;
     const egl::Surface *getSurface() const;
     FramebufferAttachmentObject *getResource() const;
+    InitState initState() const;
+    Error initializeContents(const Context *context);
+    void setInitState(InitState initState) const;
 
     // "T" must be static_castable from FramebufferAttachmentRenderTarget
     template <typename T>
@@ -174,8 +187,8 @@ class FramebufferAttachment final
 class FramebufferAttachmentObject
 {
   public:
-    FramebufferAttachmentObject() {}
-    virtual ~FramebufferAttachmentObject() {}
+    FramebufferAttachmentObject();
+    virtual ~FramebufferAttachmentObject();
 
     virtual Extents getAttachmentSize(const ImageIndex &imageIndex) const = 0;
     virtual const Format &getAttachmentFormat(GLenum binding,
@@ -186,17 +199,22 @@ class FramebufferAttachmentObject
     virtual void onDetach(const Context *context) = 0;
     virtual GLuint getId() const = 0;
 
+    // These are used for robust resource initialization.
+    virtual InitState initState(const ImageIndex &imageIndex) const = 0;
+    virtual void setInitState(const ImageIndex &imageIndex, InitState initState) = 0;
+
     Error getAttachmentRenderTarget(const Context *context,
                                     GLenum binding,
                                     const ImageIndex &imageIndex,
                                     rx::FramebufferAttachmentRenderTarget **rtOut) const;
 
-    angle::BroadcastChannel<> *getDirtyChannel();
+    Error initializeContents(const Context *context, const ImageIndex &imageIndex);
+
+    void onStateChange(const gl::Context *context) const;
+    angle::Subject *getSubject() const;
 
   protected:
     virtual rx::FramebufferAttachmentObjectImpl *getAttachmentImpl() const = 0;
-
-    angle::BroadcastChannel<> mDirtyChannel;
 };
 
 inline Extents FramebufferAttachment::getSize() const

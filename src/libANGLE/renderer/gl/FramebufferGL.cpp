@@ -15,8 +15,10 @@
 #include "libANGLE/State.h"
 #include "libANGLE/angletypes.h"
 #include "libANGLE/formatutils.h"
+#include "libANGLE/queryconversions.h"
 #include "libANGLE/renderer/ContextImpl.h"
 #include "libANGLE/renderer/gl/BlitGL.h"
+#include "libANGLE/renderer/gl/ClearMultiviewGL.h"
 #include "libANGLE/renderer/gl/ContextGL.h"
 #include "libANGLE/renderer/gl/FunctionsGL.h"
 #include "libANGLE/renderer/gl/RenderbufferGL.h"
@@ -47,26 +49,36 @@ void BindFramebufferAttachment(const FunctionsGL *functions,
             const Texture *texture     = attachment->getTexture();
             const TextureGL *textureGL = GetImplAs<TextureGL>(texture);
 
-            if (texture->getTarget() == GL_TEXTURE_2D ||
-                texture->getTarget() == GL_TEXTURE_2D_MULTISAMPLE ||
-                texture->getTarget() == GL_TEXTURE_RECTANGLE_ANGLE)
+            if (texture->getType() == TextureType::_2D ||
+                texture->getType() == TextureType::_2DMultisample ||
+                texture->getType() == TextureType::Rectangle)
             {
                 functions->framebufferTexture2D(GL_FRAMEBUFFER, attachmentPoint,
-                                                texture->getTarget(), textureGL->getTextureID(),
-                                                attachment->mipLevel());
-            }
-            else if (texture->getTarget() == GL_TEXTURE_CUBE_MAP)
-            {
-                functions->framebufferTexture2D(GL_FRAMEBUFFER, attachmentPoint,
-                                                attachment->cubeMapFace(),
+                                                ToGLenum(texture->getType()),
                                                 textureGL->getTextureID(), attachment->mipLevel());
             }
-            else if (texture->getTarget() == GL_TEXTURE_2D_ARRAY ||
-                     texture->getTarget() == GL_TEXTURE_3D)
+            else if (texture->getType() == TextureType::CubeMap)
             {
-                functions->framebufferTextureLayer(GL_FRAMEBUFFER, attachmentPoint,
-                                                   textureGL->getTextureID(),
-                                                   attachment->mipLevel(), attachment->layer());
+                functions->framebufferTexture2D(GL_FRAMEBUFFER, attachmentPoint,
+                                                ToGLenum(attachment->cubeMapFace()),
+                                                textureGL->getTextureID(), attachment->mipLevel());
+            }
+            else if (texture->getType() == TextureType::_2DArray ||
+                     texture->getType() == TextureType::_3D)
+            {
+                if (attachment->getMultiviewLayout() == GL_FRAMEBUFFER_MULTIVIEW_LAYERED_ANGLE)
+                {
+                    ASSERT(functions->framebufferTexture);
+                    functions->framebufferTexture(GL_FRAMEBUFFER, attachmentPoint,
+                                                  textureGL->getTextureID(),
+                                                  attachment->mipLevel());
+                }
+                else
+                {
+                    functions->framebufferTextureLayer(GL_FRAMEBUFFER, attachmentPoint,
+                                                       textureGL->getTextureID(),
+                                                       attachment->mipLevel(), attachment->layer());
+                }
             }
             else
             {
@@ -93,22 +105,77 @@ void BindFramebufferAttachment(const FunctionsGL *functions,
     }
 }
 
-void RetrieveMultiviewFieldsFromAttachment(const gl::FramebufferAttachment *attachment,
-                                           const std::vector<gl::Offset> **viewportOffsets,
-                                           GLenum *multiviewLayout)
+bool AreAllLayersActive(const FramebufferAttachment &attachment)
 {
-    if (attachment)
+    int baseViewIndex = attachment.getBaseViewIndex();
+    if (baseViewIndex != 0)
     {
-        *viewportOffsets = &attachment->getMultiviewViewportOffsets();
-        *multiviewLayout = attachment->getMultiviewLayout();
+        return false;
     }
+    const ImageIndex &imageIndex = attachment.getTextureImageIndex();
+    int numLayers =
+        static_cast<int>(attachment.getTexture()->getDepth(imageIndex.target, imageIndex.mipIndex));
+    return (attachment.getNumViews() == numLayers);
 }
 
-bool RequiresMultipleClears(const FramebufferAttachment *attachment, bool scissorTestEnabled)
+bool RequiresMultiviewClear(const FramebufferState &state, bool scissorTestEnabled)
 {
-    return attachment != nullptr &&
-           attachment->getMultiviewLayout() == GL_FRAMEBUFFER_MULTIVIEW_SIDE_BY_SIDE_ANGLE &&
-           scissorTestEnabled;
+    // Get one attachment and check whether all layers are attached.
+    const FramebufferAttachment *attachment = nullptr;
+    bool allTextureArraysAreFullyAttached   = true;
+    for (const FramebufferAttachment &colorAttachment : state.getColorAttachments())
+    {
+        if (colorAttachment.isAttached())
+        {
+            if (colorAttachment.getMultiviewLayout() == GL_NONE)
+            {
+                return false;
+            }
+            attachment = &colorAttachment;
+            allTextureArraysAreFullyAttached =
+                allTextureArraysAreFullyAttached && AreAllLayersActive(*attachment);
+        }
+    }
+
+    const FramebufferAttachment *depthAttachment = state.getDepthAttachment();
+    if (depthAttachment)
+    {
+        if (depthAttachment->getMultiviewLayout() == GL_NONE)
+        {
+            return false;
+        }
+        attachment = depthAttachment;
+        allTextureArraysAreFullyAttached =
+            allTextureArraysAreFullyAttached && AreAllLayersActive(*attachment);
+    }
+    const FramebufferAttachment *stencilAttachment = state.getStencilAttachment();
+    if (stencilAttachment)
+    {
+        if (stencilAttachment->getMultiviewLayout() == GL_NONE)
+        {
+            return false;
+        }
+        attachment = stencilAttachment;
+        allTextureArraysAreFullyAttached =
+            allTextureArraysAreFullyAttached && AreAllLayersActive(*attachment);
+    }
+
+    if (attachment == nullptr)
+    {
+        return false;
+    }
+    switch (attachment->getMultiviewLayout())
+    {
+        case GL_FRAMEBUFFER_MULTIVIEW_LAYERED_ANGLE:
+            // If all layers of each texture array are active, then there is no need to issue a
+            // special multiview clear.
+            return !allTextureArraysAreFullyAttached;
+        case GL_FRAMEBUFFER_MULTIVIEW_SIDE_BY_SIDE_ANGLE:
+            return (scissorTestEnabled == true);
+        default:
+            UNREACHABLE();
+    }
+    return false;
 }
 
 }  // namespace
@@ -118,12 +185,14 @@ FramebufferGL::FramebufferGL(const FramebufferState &state,
                              StateManagerGL *stateManager,
                              const WorkaroundsGL &workarounds,
                              BlitGL *blitter,
+                             ClearMultiviewGL *multiviewClearer,
                              bool isDefault)
     : FramebufferImpl(state),
       mFunctions(functions),
       mStateManager(stateManager),
       mWorkarounds(workarounds),
       mBlitter(blitter),
+      mMultiviewClearer(multiviewClearer),
       mFramebufferID(0),
       mIsDefault(isDefault),
       mAppliedEnabledDrawBuffers(1)
@@ -139,12 +208,14 @@ FramebufferGL::FramebufferGL(GLuint id,
                              const FunctionsGL *functions,
                              const WorkaroundsGL &workarounds,
                              BlitGL *blitter,
+                             ClearMultiviewGL *multiviewClearer,
                              StateManagerGL *stateManager)
     : FramebufferImpl(state),
       mFunctions(functions),
       mStateManager(stateManager),
       mWorkarounds(workarounds),
       mBlitter(blitter),
+      mMultiviewClearer(multiviewClearer),
       mFramebufferID(id),
       mIsDefault(true),
       mAppliedEnabledDrawBuffers(1)
@@ -180,11 +251,11 @@ Error FramebufferGL::invalidate(const gl::Context *context, size_t count, const 
         mFunctions->invalidateFramebuffer(GL_FRAMEBUFFER, static_cast<GLsizei>(count),
                                           finalAttachmentsPtr);
     }
-    else if (mFunctions->discardFramebuffer)
+    else if (mFunctions->discardFramebufferEXT)
     {
         mStateManager->bindFramebuffer(GL_FRAMEBUFFER, mFramebufferID);
-        mFunctions->discardFramebuffer(GL_FRAMEBUFFER, static_cast<GLsizei>(count),
-                                       finalAttachmentsPtr);
+        mFunctions->discardFramebufferEXT(GL_FRAMEBUFFER, static_cast<GLsizei>(count),
+                                          finalAttachmentsPtr);
     }
 
     return gl::NoError();
@@ -222,15 +293,15 @@ Error FramebufferGL::clear(const gl::Context *context, GLbitfield mask)
     syncClearState(context, mask);
     mStateManager->bindFramebuffer(GL_FRAMEBUFFER, mFramebufferID);
 
-    if (RequiresMultipleClears(mState.getFirstNonNullAttachment(),
-                               context->getGLState().isScissorTestEnabled()))
+    if (!RequiresMultiviewClear(mState, context->getGLState().isScissorTestEnabled()))
     {
-        genericSideBySideClear(context, ClearCommandType::Clear, mask, GL_NONE, 0, nullptr, 0.0f,
-                               0);
+        mFunctions->clear(mask);
     }
     else
     {
-        mFunctions->clear(mask);
+        mMultiviewClearer->clearMultiviewFBO(mState, context->getGLState().getScissor(),
+                                             ClearMultiviewGL::ClearCommandType::Clear, mask,
+                                             GL_NONE, 0, nullptr, 0.0f, 0);
     }
 
     return gl::NoError();
@@ -244,16 +315,16 @@ Error FramebufferGL::clearBufferfv(const gl::Context *context,
     syncClearBufferState(context, buffer, drawbuffer);
     mStateManager->bindFramebuffer(GL_FRAMEBUFFER, mFramebufferID);
 
-    if (RequiresMultipleClears(mState.getFirstNonNullAttachment(),
-                               context->getGLState().isScissorTestEnabled()))
+    if (!RequiresMultiviewClear(mState, context->getGLState().isScissorTestEnabled()))
     {
-        genericSideBySideClear(context, ClearCommandType::ClearBufferfv,
-                               static_cast<GLbitfield>(0u), buffer, drawbuffer,
-                               reinterpret_cast<const uint8_t *>(values), 0.0f, 0);
+        mFunctions->clearBufferfv(buffer, drawbuffer, values);
     }
     else
     {
-        mFunctions->clearBufferfv(buffer, drawbuffer, values);
+        mMultiviewClearer->clearMultiviewFBO(mState, context->getGLState().getScissor(),
+                                             ClearMultiviewGL::ClearCommandType::ClearBufferfv,
+                                             static_cast<GLbitfield>(0u), buffer, drawbuffer,
+                                             reinterpret_cast<const uint8_t *>(values), 0.0f, 0);
     }
 
     return gl::NoError();
@@ -267,16 +338,16 @@ Error FramebufferGL::clearBufferuiv(const gl::Context *context,
     syncClearBufferState(context, buffer, drawbuffer);
     mStateManager->bindFramebuffer(GL_FRAMEBUFFER, mFramebufferID);
 
-    if (RequiresMultipleClears(mState.getFirstNonNullAttachment(),
-                               context->getGLState().isScissorTestEnabled()))
+    if (!RequiresMultiviewClear(mState, context->getGLState().isScissorTestEnabled()))
     {
-        genericSideBySideClear(context, ClearCommandType::ClearBufferuiv,
-                               static_cast<GLbitfield>(0u), buffer, drawbuffer,
-                               reinterpret_cast<const uint8_t *>(values), 0.0f, 0);
+        mFunctions->clearBufferuiv(buffer, drawbuffer, values);
     }
     else
     {
-        mFunctions->clearBufferuiv(buffer, drawbuffer, values);
+        mMultiviewClearer->clearMultiviewFBO(mState, context->getGLState().getScissor(),
+                                             ClearMultiviewGL::ClearCommandType::ClearBufferuiv,
+                                             static_cast<GLbitfield>(0u), buffer, drawbuffer,
+                                             reinterpret_cast<const uint8_t *>(values), 0.0f, 0);
     }
 
     return gl::NoError();
@@ -290,16 +361,16 @@ Error FramebufferGL::clearBufferiv(const gl::Context *context,
     syncClearBufferState(context, buffer, drawbuffer);
     mStateManager->bindFramebuffer(GL_FRAMEBUFFER, mFramebufferID);
 
-    if (RequiresMultipleClears(mState.getFirstNonNullAttachment(),
-                               context->getGLState().isScissorTestEnabled()))
+    if (!RequiresMultiviewClear(mState, context->getGLState().isScissorTestEnabled()))
     {
-        genericSideBySideClear(context, ClearCommandType::ClearBufferiv,
-                               static_cast<GLbitfield>(0u), buffer, drawbuffer,
-                               reinterpret_cast<const uint8_t *>(values), 0.0f, 0);
+        mFunctions->clearBufferiv(buffer, drawbuffer, values);
     }
     else
     {
-        mFunctions->clearBufferiv(buffer, drawbuffer, values);
+        mMultiviewClearer->clearMultiviewFBO(mState, context->getGLState().getScissor(),
+                                             ClearMultiviewGL::ClearCommandType::ClearBufferiv,
+                                             static_cast<GLbitfield>(0u), buffer, drawbuffer,
+                                             reinterpret_cast<const uint8_t *>(values), 0.0f, 0);
     }
 
     return gl::NoError();
@@ -314,68 +385,19 @@ Error FramebufferGL::clearBufferfi(const gl::Context *context,
     syncClearBufferState(context, buffer, drawbuffer);
     mStateManager->bindFramebuffer(GL_FRAMEBUFFER, mFramebufferID);
 
-    if (RequiresMultipleClears(mState.getFirstNonNullAttachment(),
-                               context->getGLState().isScissorTestEnabled()))
-    {
-        genericSideBySideClear(context, ClearCommandType::ClearBufferfi,
-                               static_cast<GLbitfield>(0u), buffer, drawbuffer, nullptr, depth,
-                               stencil);
-    }
-    else
+    if (!RequiresMultiviewClear(mState, context->getGLState().isScissorTestEnabled()))
     {
         mFunctions->clearBufferfi(buffer, drawbuffer, depth, stencil);
     }
+    else
+    {
+        mMultiviewClearer->clearMultiviewFBO(mState, context->getGLState().getScissor(),
+                                             ClearMultiviewGL::ClearCommandType::ClearBufferfi,
+                                             static_cast<GLbitfield>(0u), buffer, drawbuffer,
+                                             nullptr, depth, stencil);
+    }
 
     return gl::NoError();
-}
-
-void FramebufferGL::genericSideBySideClear(const gl::Context *context,
-                                           ClearCommandType clearCommandType,
-                                           GLbitfield mask,
-                                           GLenum buffer,
-                                           GLint drawbuffer,
-                                           const uint8_t *values,
-                                           GLfloat depth,
-                                           GLint stencil)
-{
-    // For side-by-side framebuffers we have to go over each view and set its scissor rectangle
-    // as the first one and just then call Clear*. This is necessary because Clear* commands use
-    // only the first viewport's scissor rectangle.
-    const auto &scissorBase                 = context->getGLState().getScissor();
-    const FramebufferAttachment *attachment = mState.getFirstNonNullAttachment();
-    ASSERT(attachment != nullptr);
-    const auto &viewportOffsets = attachment->getMultiviewViewportOffsets();
-
-    for (size_t i = 0u; i < viewportOffsets.size(); ++i)
-    {
-        gl::Rectangle scissor(scissorBase.x + viewportOffsets[i].x,
-                              scissorBase.y + viewportOffsets[i].y, scissorBase.width,
-                              scissorBase.height);
-        mStateManager->setScissorIndexed(0u, scissor);
-        switch (clearCommandType)
-        {
-            case ClearCommandType::Clear:
-                mFunctions->clear(mask);
-                break;
-            case ClearCommandType::ClearBufferfv:
-                mFunctions->clearBufferfv(buffer, drawbuffer,
-                                          reinterpret_cast<const GLfloat *>(values));
-                break;
-            case ClearCommandType::ClearBufferuiv:
-                mFunctions->clearBufferuiv(buffer, drawbuffer,
-                                           reinterpret_cast<const GLuint *>(values));
-                break;
-            case ClearCommandType::ClearBufferiv:
-                mFunctions->clearBufferiv(buffer, drawbuffer,
-                                          reinterpret_cast<const GLint *>(values));
-                break;
-            case ClearCommandType::ClearBufferfi:
-                mFunctions->clearBufferfi(buffer, drawbuffer, depth, stencil);
-                break;
-            default:
-                UNREACHABLE();
-        }
-    }
 }
 
 GLenum FramebufferGL::getImplementationColorReadFormat(const gl::Context *context) const
@@ -389,14 +411,14 @@ GLenum FramebufferGL::getImplementationColorReadType(const gl::Context *context)
 {
     const auto *readAttachment = mState.getReadAttachment();
     const Format &format       = readAttachment->getFormat();
-    return format.info->getReadPixelsType();
+    return format.info->getReadPixelsType(context->getClientVersion());
 }
 
 Error FramebufferGL::readPixels(const gl::Context *context,
                                 const gl::Rectangle &origArea,
                                 GLenum format,
                                 GLenum type,
-                                void *ptrOrOffset) const
+                                void *ptrOrOffset)
 {
     // Clip read area to framebuffer.
     const gl::Extents fbSize = getState().getReadAttachment()->getSize();
@@ -408,8 +430,9 @@ Error FramebufferGL::readPixels(const gl::Context *context,
         return gl::NoError();
     }
 
-    PixelPackState packState;
-    packState.copyFrom(context, context->getGLState().getPackState());
+    PixelPackState packState     = context->getGLState().getPackState();
+    const gl::Buffer *packBuffer =
+        context->getGLState().getTargetBuffer(gl::BufferBinding::PixelPack);
 
     nativegl::ReadPixelsFormat readPixelsFormat =
         nativegl::GetReadPixelsFormat(mFunctions, mWorkarounds, format, type);
@@ -419,7 +442,7 @@ Error FramebufferGL::readPixels(const gl::Context *context,
     mStateManager->bindFramebuffer(GL_READ_FRAMEBUFFER, mFramebufferID);
 
     bool useOverlappingRowsWorkaround = mWorkarounds.packOverlappingRowsSeparatelyPackBuffer &&
-                                        packState.pixelBuffer.get() && packState.rowLength != 0 &&
+                                        packBuffer && packState.rowLength != 0 &&
                                         packState.rowLength < area.width;
 
     GLubyte *pixels = reinterpret_cast<GLubyte *>(ptrOrOffset);
@@ -458,9 +481,9 @@ Error FramebufferGL::readPixels(const gl::Context *context,
         gl::ErrorOrResult<bool> useLastRowPaddingWorkaround = false;
         if (mWorkarounds.packLastRowSeparatelyForPaddingInclusion)
         {
-            useLastRowPaddingWorkaround =
-                ShouldApplyLastRowPaddingWorkaround(gl::Extents(area.width, area.height, 1),
-                                                    packState, readFormat, readType, false, pixels);
+            useLastRowPaddingWorkaround = ShouldApplyLastRowPaddingWorkaround(
+                gl::Extents(area.width, area.height, 1), packState, packBuffer, readFormat,
+                readType, false, pixels);
         }
 
         if (useLastRowPaddingWorkaround.isError())
@@ -474,7 +497,6 @@ Error FramebufferGL::readPixels(const gl::Context *context,
         }
     }
 
-    packState.pixelBuffer.set(context, nullptr);
     return retVal;
 }
 
@@ -573,7 +595,7 @@ gl::Error FramebufferGL::getSamplePosition(size_t index, GLfloat *xy) const
     return gl::NoError();
 }
 
-bool FramebufferGL::checkStatus() const
+bool FramebufferGL::checkStatus(const gl::Context *context) const
 {
     mStateManager->bindFramebuffer(GL_FRAMEBUFFER, mFramebufferID);
     GLenum status = mFunctions->checkFramebufferStatus(GL_FRAMEBUFFER);
@@ -584,38 +606,44 @@ bool FramebufferGL::checkStatus() const
     return (status == GL_FRAMEBUFFER_COMPLETE);
 }
 
-void FramebufferGL::syncState(const gl::Context *context, const Framebuffer::DirtyBits &dirtyBits)
+gl::Error FramebufferGL::syncState(const gl::Context *context,
+                                   const Framebuffer::DirtyBits &dirtyBits)
 {
     // Don't need to sync state for the default FBO.
     if (mIsDefault)
     {
-        return;
+        return gl::NoError();
     }
 
     mStateManager->bindFramebuffer(GL_FRAMEBUFFER, mFramebufferID);
 
-    const std::vector<gl::Offset> *attachmentViewportOffsets = nullptr;
-    GLenum multiviewLayout                                   = GL_NONE;
-    bool isAttachmentModified                                = false;
+    // A pointer to one of the attachments for which the texture or the render buffer is not zero.
+    const FramebufferAttachment *attachment = nullptr;
 
     for (auto dirtyBit : dirtyBits)
     {
         switch (dirtyBit)
         {
             case Framebuffer::DIRTY_BIT_DEPTH_ATTACHMENT:
-                BindFramebufferAttachment(mFunctions, GL_DEPTH_ATTACHMENT,
-                                          mState.getDepthAttachment());
-                RetrieveMultiviewFieldsFromAttachment(mState.getDepthAttachment(),
-                                                      &attachmentViewportOffsets, &multiviewLayout);
-                isAttachmentModified = true;
+            {
+                const FramebufferAttachment *newAttachment = mState.getDepthAttachment();
+                BindFramebufferAttachment(mFunctions, GL_DEPTH_ATTACHMENT, newAttachment);
+                if (newAttachment)
+                {
+                    attachment = newAttachment;
+                }
                 break;
+            }
             case Framebuffer::DIRTY_BIT_STENCIL_ATTACHMENT:
-                BindFramebufferAttachment(mFunctions, GL_STENCIL_ATTACHMENT,
-                                          mState.getStencilAttachment());
-                RetrieveMultiviewFieldsFromAttachment(mState.getStencilAttachment(),
-                                                      &attachmentViewportOffsets, &multiviewLayout);
-                isAttachmentModified = true;
+            {
+                const FramebufferAttachment *newAttachment = mState.getStencilAttachment();
+                BindFramebufferAttachment(mFunctions, GL_STENCIL_ATTACHMENT, newAttachment);
+                if (newAttachment)
+                {
+                    attachment = newAttachment;
+                }
                 break;
+            }
             case Framebuffer::DIRTY_BIT_DRAW_BUFFERS:
             {
                 const auto &drawBuffers = mState.getDrawBufferStates();
@@ -640,9 +668,9 @@ void FramebufferGL::syncState(const gl::Context *context, const Framebuffer::Dir
                                                   mState.getDefaultSamples());
                 break;
             case Framebuffer::DIRTY_BIT_DEFAULT_FIXED_SAMPLE_LOCATIONS:
-                mFunctions->framebufferParameteri(GL_FRAMEBUFFER,
-                                                  GL_FRAMEBUFFER_DEFAULT_FIXED_SAMPLE_LOCATIONS,
-                                                  mState.getDefaultFixedSampleLocations());
+                mFunctions->framebufferParameteri(
+                    GL_FRAMEBUFFER, GL_FRAMEBUFFER_DEFAULT_FIXED_SAMPLE_LOCATIONS,
+                    gl::ConvertToGLBoolean(mState.getDefaultFixedSampleLocations()));
                 break;
             default:
             {
@@ -650,31 +678,29 @@ void FramebufferGL::syncState(const gl::Context *context, const Framebuffer::Dir
                        dirtyBit < Framebuffer::DIRTY_BIT_COLOR_ATTACHMENT_MAX);
                 size_t index =
                     static_cast<size_t>(dirtyBit - Framebuffer::DIRTY_BIT_COLOR_ATTACHMENT_0);
-                BindFramebufferAttachment(mFunctions,
-                                          static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + index),
-                                          mState.getColorAttachment(index));
-                RetrieveMultiviewFieldsFromAttachment(mState.getColorAttachment(index),
-                                                      &attachmentViewportOffsets, &multiviewLayout);
-                isAttachmentModified = true;
+                const FramebufferAttachment *newAttachment = mState.getColorAttachment(index);
+                BindFramebufferAttachment(
+                    mFunctions, static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + index), newAttachment);
+                if (newAttachment)
+                {
+                    attachment = newAttachment;
+                }
                 break;
             }
         }
     }
 
-    if (isAttachmentModified)
+    if (attachment)
     {
-        const bool isSideBySide = multiviewLayout == GL_FRAMEBUFFER_MULTIVIEW_SIDE_BY_SIDE_ANGLE;
+        const bool isSideBySide =
+            (attachment->getMultiviewLayout() == GL_FRAMEBUFFER_MULTIVIEW_SIDE_BY_SIDE_ANGLE);
         mStateManager->setSideBySide(isSideBySide);
-        if (attachmentViewportOffsets != nullptr)
-        {
-            mStateManager->setViewportOffsets(*attachmentViewportOffsets);
-        }
-        else
-        {
-            mStateManager->setViewportOffsets(
-                FramebufferAttachment::GetDefaultViewportOffsetVector());
-        }
+        mStateManager->setViewportOffsets(attachment->getMultiviewViewportOffsets());
+        mStateManager->updateMultiviewBaseViewLayerIndexUniform(context->getGLState().getProgram(),
+                                                                getState());
     }
+
+    return gl::NoError();
 }
 
 GLuint FramebufferGL::getFramebufferID() const
@@ -687,7 +713,7 @@ bool FramebufferGL::isDefault() const
     return mIsDefault;
 }
 
-void FramebufferGL::maskOutInactiveOutputDrawBuffers(DrawBufferMask maxSet)
+void FramebufferGL::maskOutInactiveOutputDrawBuffers(GLenum binding, DrawBufferMask maxSet)
 {
     auto targetAppliedDrawBuffers = mState.getEnabledDrawBuffers() & maxSet;
     if (mAppliedEnabledDrawBuffers != targetAppliedDrawBuffers)
@@ -704,7 +730,7 @@ void FramebufferGL::maskOutInactiveOutputDrawBuffers(DrawBufferMask maxSet)
             drawBuffers[i] = targetAppliedDrawBuffers[i] ? stateDrawBuffers[i] : GL_NONE;
         }
 
-        mStateManager->bindFramebuffer(GL_FRAMEBUFFER, mFramebufferID);
+        mStateManager->bindFramebuffer(binding, mFramebufferID);
         mFunctions->drawBuffers(drawBufferCount, drawBuffers);
     }
 }
@@ -815,7 +841,6 @@ gl::Error FramebufferGL::readPixelsRowByRow(const gl::Context *context,
                                             const gl::PixelPackState &pack,
                                             GLubyte *pixels) const
 {
-
     const gl::InternalFormat &glFormat = gl::GetInternalFormatInfo(format, type);
 
     GLuint rowBytes = 0;
@@ -825,10 +850,8 @@ gl::Error FramebufferGL::readPixelsRowByRow(const gl::Context *context,
     ANGLE_TRY_RESULT(glFormat.computeSkipBytes(rowBytes, 0, pack, false), skipBytes);
 
     gl::PixelPackState directPack;
-    directPack.pixelBuffer.set(context, pack.pixelBuffer.get());
     directPack.alignment   = 1;
     mStateManager->setPixelPackState(directPack);
-    directPack.pixelBuffer.set(context, nullptr);
 
     pixels += skipBytes;
     for (GLint y = area.y; y < area.y + area.height; ++y)
@@ -866,10 +889,8 @@ gl::Error FramebufferGL::readPixelsAllAtOnce(const gl::Context *context,
         ANGLE_TRY_RESULT(glFormat.computeSkipBytes(rowBytes, 0, pack, false), skipBytes);
 
         gl::PixelPackState directPack;
-        directPack.pixelBuffer.set(context, pack.pixelBuffer.get());
         directPack.alignment = 1;
         mStateManager->setPixelPackState(directPack);
-        directPack.pixelBuffer.set(context, nullptr);
 
         pixels += skipBytes + (area.height - 1) * rowBytes;
         mFunctions->readPixels(area.x, area.y + area.height - 1, area.width, 1, format, type,

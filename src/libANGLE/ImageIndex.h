@@ -10,6 +10,7 @@
 #define LIBANGLE_IMAGE_INDEX_H_
 
 #include "common/mathutil.h"
+#include "libANGLE/PackedGLEnums.h"
 
 #include "angle_gl.h"
 
@@ -20,41 +21,54 @@ class ImageIndexIterator;
 
 struct ImageIndex
 {
-    GLenum type;
+    TextureType type;
+    TextureTarget target;
+
     GLint mipIndex;
+
     GLint layerIndex;
+    GLint numLayers;
 
     ImageIndex(const ImageIndex &other);
     ImageIndex &operator=(const ImageIndex &other);
 
     bool hasLayer() const { return layerIndex != ENTIRE_LEVEL; }
     bool is3D() const;
+    GLint cubeMapFaceIndex() const;
+    bool valid() const;
 
     static ImageIndex Make2D(GLint mipIndex);
     static ImageIndex MakeRectangle(GLint mipIndex);
-    static ImageIndex MakeCube(GLenum target, GLint mipIndex);
+    static ImageIndex MakeCube(TextureTarget target, GLint mipIndex);
     static ImageIndex Make2DArray(GLint mipIndex, GLint layerIndex);
+    static ImageIndex Make2DArrayRange(GLint mipIndex, GLint layerIndex, GLint numLayers);
     static ImageIndex Make3D(GLint mipIndex, GLint layerIndex = ENTIRE_LEVEL);
-    static ImageIndex MakeGeneric(GLenum target, GLint mipIndex);
+    static ImageIndex MakeGeneric(TextureTarget target, GLint mipIndex);
     static ImageIndex Make2DMultisample();
 
     static ImageIndex MakeInvalid();
 
     static const GLint ENTIRE_LEVEL = static_cast<GLint>(-1);
 
-    bool operator<(const ImageIndex &other) const;
-    bool operator==(const ImageIndex &other) const;
-    bool operator!=(const ImageIndex &other) const;
-
   private:
     friend class ImageIndexIterator;
 
-    ImageIndex(GLenum typeIn, GLint mipIndexIn, GLint layerIndexIn);
+    ImageIndex(TextureType typeIn,
+               TextureTarget targetIn,
+               GLint mipIndexIn,
+               GLint layerIndexIn,
+               GLint numLayersIn);
 };
+
+bool operator<(const ImageIndex &a, const ImageIndex &b);
+bool operator==(const ImageIndex &a, const ImageIndex &b);
+bool operator!=(const ImageIndex &a, const ImageIndex &b);
 
 class ImageIndexIterator
 {
   public:
+    ImageIndexIterator(const ImageIndexIterator &other);
+
     static ImageIndexIterator Make2D(GLint minMip, GLint maxMip);
     static ImageIndexIterator MakeRectangle(GLint minMip, GLint maxMip);
     static ImageIndexIterator MakeCube(GLint minMip, GLint maxMip);
@@ -67,19 +81,22 @@ class ImageIndexIterator
     bool hasNext() const;
 
   private:
-
-    ImageIndexIterator(GLenum type, const Range<GLint> &mipRange,
-                       const Range<GLint> &layerRange, const GLsizei *layerCounts);
+    ImageIndexIterator(TextureType type,
+                       angle::EnumIterator<TextureTarget> targetLow,
+                       angle::EnumIterator<TextureTarget> targetHigh,
+                       const Range<GLint> &mipRange,
+                       const Range<GLint> &layerRange,
+                       const GLsizei *layerCounts);
 
     GLint maxLayer() const;
-    void done();
 
-    GLenum mType;
-    Range<GLint> mMipRange;
-    Range<GLint> mLayerRange;
-    const GLsizei *mLayerCounts;
-    GLint mCurrentMip;
-    GLint mCurrentLayer;
+    const angle::EnumIterator<TextureTarget> mTargetLow;
+    const angle::EnumIterator<TextureTarget> mTargetHigh;
+    const Range<GLint> mMipRange;
+    const Range<GLint> mLayerRange;
+    const GLsizei *const mLayerCounts;
+
+    ImageIndex mCurrentIndex;
 };
 
 }
