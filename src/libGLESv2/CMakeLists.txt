@@ -15,8 +15,8 @@ SET(ANGLE_SETUP_SOURCES
     entry_points_egl_ext.cpp
     entry_points_gles_2_0_autogen.cpp
     entry_points_gles_2_0_ext.cpp
-    entry_points_gles_3_0.cpp
-    entry_points_gles_3_1.cpp
+    entry_points_gles_3_0_autogen.cpp
+    entry_points_gles_3_1_autogen.cpp
     global_state.cpp
     
 )
