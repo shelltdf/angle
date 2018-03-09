@@ -13,11 +13,14 @@ SET(ANGLE_SETUP_SOURCES
     
     entry_points_egl.cpp
     entry_points_egl_ext.cpp
+    entry_points_gles_1_0_autogen.cpp
     entry_points_gles_2_0_autogen.cpp
     entry_points_gles_2_0_ext.cpp
     entry_points_gles_3_0_autogen.cpp
     entry_points_gles_3_1_autogen.cpp
+    entry_points_gles_ext_autogen.cpp
     global_state.cpp
+    proc_table_autogen.cpp
     
 )
 
@@ -26,6 +29,7 @@ SET(ANGLE_SETUP_SOURCES
 # ELSE(BUILD_STATIC_LIBRAY)
 		add_definitions(-DLIBGLESV2_IMPLEMENTATION)
 		add_definitions(-DGL_APICALL="")
+		add_definitions(-DGL_API="")
 # ENDIF(BUILD_STATIC_LIBRAY)
 
 INCLUDE_DIRECTORIES(AFTER ${PROJECT_SOURCE_DIR}/src )

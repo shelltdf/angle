@@ -22,6 +22,7 @@ FILE(GLOB common_SOURCES "../common/*.cpp")
 FILE(GLOB common_SOURCES_unittest "../common/*_unittest.cpp")
 FILE(GLOB common_SOURCES_linux "../common/*_linux.cpp")
 FILE(GLOB common_SOURCES_mac "../common/*_mac.cpp")
+FILE(GLOB common_SOURCES_smhasher "../common/third_party/smhasher/src/*.cpp")
 
 FILE(GLOB this_SOURCES "*.cpp")
 FILE(GLOB this_SOURCES_unittest "*_unittest.cpp")
@@ -68,6 +69,7 @@ SET(ANGLE_SETUP_SOURCES
     ${compiler_SOURCES}
     ${image_util_SOURCES}
     ${common_SOURCES}
+    ${common_SOURCES_smhasher}
     ${translator_SOURCES}
     ${preprocessor_SOURCES}
     

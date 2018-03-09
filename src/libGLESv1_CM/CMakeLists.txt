@@ -10,17 +10,21 @@ SET(ANGLE_SETUP_HEADERS
 SET(ANGLE_SETUP_SOURCES
     libGLESv1_CM.def
     libGLESv1_CM.cpp 
+    
+    ../libGLESv2/entry_points_gles_1_0_autogen.cpp
+    ../libGLESv2/entry_points_gles_ext_autogen.cpp
+    ../libGLESv2/global_state.cpp
 )
 
 # IF(BUILD_STATIC_LIBRAY)
 
 # ELSE(BUILD_STATIC_LIBRAY)
-		# add_definitions(-DLIBGLESV2_IMPLEMENTATION)
-		# add_definitions(-DGL_APICALL="")
+		add_definitions(-DLIBGLESV2_IMPLEMENTATION)
+		add_definitions(-DGL_APICALL="")
 # ENDIF(BUILD_STATIC_LIBRAY)
 
-# INCLUDE_DIRECTORIES(AFTER ${PROJECT_SOURCE_DIR}/src )
-# INCLUDE_DIRECTORIES(AFTER ${PROJECT_SOURCE_DIR}/src/common/third_party/base )
+INCLUDE_DIRECTORIES(AFTER ${PROJECT_SOURCE_DIR}/src )
+INCLUDE_DIRECTORIES(AFTER ${PROJECT_SOURCE_DIR}/src/common/third_party/base )
 
 
 ANGLE_SETUP_DYNAMIC_LIBRARY(ON)
